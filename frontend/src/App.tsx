@@ -1,3 +1,4 @@
+// src/App.tsx
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ConnectionProvider, WalletProvider, useWallet } from "@solana/wallet-adapter-react";
 import { WalletModalProvider, WalletMultiButton } from "@solana/wallet-adapter-react-ui";
@@ -15,22 +16,9 @@ import { motion, AnimatePresence } from "framer-motion";
 import confetti from "canvas-confetti";
 import "@solana/wallet-adapter-react-ui/styles.css";
 
-/**
- * VoltNet Lottery dApp — "NEON ARCADE" THEME ⚡
- * -------------------------------------------------------------------
- * Two screens with rich visuals:
- *   • Landing (when wallet is NOT connected): hero, features, CTA
- *   • Dashboard (when connected): live jackpot, buy flow, countdown
- *
- * Design notes:
- *   • Custom gradient sky + parallax stars + neon grid
- *   • Floating lottery balls & Solana coin, glass cards, 3D tilt
- *   • Magnetic CTA with shine, shimmering jackpot, confetti
- *
- * Single-file React. Only extra deps: framer-motion + canvas-confetti.
- */
-
-// -------------------- POLYFILLS (Vite/Browser) --------------------
+/* -------------------------------------------------------
+   Polyfills (vite/browser)
+------------------------------------------------------- */
 import { Buffer } from "buffer";
 if (typeof globalThis !== "undefined") {
   // @ts-ignore
@@ -41,13 +29,9 @@ if (typeof globalThis !== "undefined") {
   globalThis.process = globalThis.process || { env: {} };
 }
 
-// -------------------- CONFIG --------------------
-// You can override via .env(.local)
-//   VITE_SOLANA_CLUSTER = devnet | mainnet-beta
-//   VITE_SOLANA_RPC     = https://your.rpc.endpoint
-//   VITE_PLATFORM_FEE_BPS, VITE_RAKE_AT_PAYOUT_BPS, VITE_WITHDRAWAL_FEE_BPS
-//   VITE_TICKET_PRICE_SOL, VITE_TREASURY_PUBKEY, VITE_PROGRAM_ID
-
+/* -------------------------------------------------------
+   CONFIG (env)
+------------------------------------------------------- */
 type SupportedCluster = "devnet" | "mainnet-beta";
 const CLUSTER: SupportedCluster =
   (import.meta.env.VITE_SOLANA_CLUSTER as SupportedCluster) || "devnet";
@@ -56,44 +40,38 @@ const DEFAULT_ENDPOINT = clusterApiUrl(CLUSTER);
 const RPC_ENDPOINT: string =
   (import.meta.env.VITE_SOLANA_RPC as string) || DEFAULT_ENDPOINT || "https://api.devnet.solana.com";
 
-// Program ID (optional; enables Anchor flow when provided)
-const PROGRAM_ID_STR = (import.meta.env.VITE_PROGRAM_ID as string) || "";
-const PROGRAM_ID = PROGRAM_ID_STR ? new PublicKey(PROGRAM_ID_STR) : null;
+const PROGRAM_ID_STR = (import.meta.env.VITE_PROGRAM_ID as string) || ""; // string only (évite l’overload TS)
+const PROGRAM_ID_KEY: PublicKey | null = PROGRAM_ID_STR ? new PublicKey(PROGRAM_ID_STR) : null;
 
-// Temporary escrow (used only for fallback transfer flow)
 const ESCROW_WALLET = new PublicKey("4ZubhYsJvTLeVtggbtf5qw8oHmXBG4xDrzkZuracGSaa");
-
-// Treasury wallet (fees)
 const TREASURY_PUBKEY = new PublicKey(
   (import.meta.env.VITE_TREASURY_PUBKEY as string) || "4ZubhYsJvTLeVtggbtf5qw8oHmXBG4xDrzkZuracGSaa"
 );
 
-// Business rules (UI)
 const RAW_TICKET_PRICE_SOL = Number.parseFloat(String(import.meta.env.VITE_TICKET_PRICE_SOL ?? "0.1"));
-const TICKET_PRICE_SOL = Number.isFinite(RAW_TICKET_PRICE_SOL) && RAW_TICKET_PRICE_SOL > 0 ? RAW_TICKET_PRICE_SOL : 0.1; // default 0.1 SOL
+const TICKET_PRICE_SOL =
+  Number.isFinite(RAW_TICKET_PRICE_SOL) && RAW_TICKET_PRICE_SOL > 0 ? RAW_TICKET_PRICE_SOL : 0.1;
+
 const FEES = {
-  PLATFORM_FEE_BPS: Number(import.meta.env.VITE_PLATFORM_FEE_BPS ?? 500), // 5%
-  RAKE_AT_PAYOUT_BPS: Number(import.meta.env.VITE_RAKE_AT_PAYOUT_BPS ?? 500), // 5%
-  WITHDRAWAL_FEE_BPS: Number(import.meta.env.VITE_WITHDRAWAL_FEE_BPS ?? 200), // 2%
+  PLATFORM_FEE_BPS: Number(import.meta.env.VITE_PLATFORM_FEE_BPS ?? 500),
+  RAKE_AT_PAYOUT_BPS: Number(import.meta.env.VITE_RAKE_AT_PAYOUT_BPS ?? 500),
+  WITHDRAWAL_FEE_BPS: Number(import.meta.env.VITE_WITHDRAWAL_FEE_BPS ?? 200),
   BUYBACK_BPS_OF_TREASURY: Number(import.meta.env.VITE_BUYBACK_BPS_OF_TREASURY ?? 0),
 };
 
-// -------------------- Utils --------------------
+/* -------------------------------------------------------
+   Utils
+------------------------------------------------------- */
 function formatSol(lamports: number) {
-  return (lamports / LAMPORTS_PER_SOL).toLocaleString(undefined, {
-    maximumFractionDigits: 4,
-  });
+  return (lamports / LAMPORTS_PER_SOL).toLocaleString(undefined, { maximumFractionDigits: 4 });
 }
-
 function toLamports(sol: number) {
   return Math.round(sol * LAMPORTS_PER_SOL);
 }
-
 function endOfCurrentMonth(): Date {
   const now = new Date();
   return new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
 }
-
 function useCountdown(target: Date) {
   const [, setTick] = useState(0);
   useEffect(() => {
@@ -108,15 +86,12 @@ function useCountdown(target: Date) {
   const sec = s % 60;
   return { d, h, m, s: sec };
 }
-
 function clusterQueryParam(cluster: SupportedCluster) {
   return cluster === "mainnet-beta" ? "" : `?cluster=${cluster}`;
 }
-
 function bps(amountLamports: number, bpsValue: number) {
   return Math.floor((amountLamports * bpsValue) / 10_000);
 }
-
 function computeTicketSplit(count: number, unitPriceSol: number, platformFeeBps: number) {
   const totalLamports = toLamports(count * unitPriceSol);
   const feeLamports = bps(totalLamports, platformFeeBps);
@@ -124,18 +99,10 @@ function computeTicketSplit(count: number, unitPriceSol: number, platformFeeBps:
   return { totalLamports, feeLamports, jackpotLamports };
 }
 
-function computePayoutSplit(potLamports: number, winnerBps: number, rakeBps: number, withdrawalFeeBps: number) {
-  const winnerGross = bps(potLamports, winnerBps);
-  const rake = bps(potLamports, rakeBps);
-  const rollover = potLamports - winnerGross - rake;
-  const withdrawalFee = bps(winnerGross, withdrawalFeeBps);
-  const winnerNet = winnerGross - withdrawalFee;
-  return { winnerGross, winnerNet, rollover, rake, withdrawalFee };
-}
-
-// -------------------- Anchor helpers --------------------
-// Minimal IDL subset required by the frontend (initialize + buy_tickets + accounts)
-const VOLTNET_IDL: anchor.Idl = {
+/* -------------------------------------------------------
+   Anchor helpers — IDL minimal (typé any pour éviter TS)
+------------------------------------------------------- */
+const VOLTNET_IDL: any = {
   version: "0.1.0",
   name: "voltnet_lottery",
   instructions: [
@@ -191,22 +158,19 @@ const VOLTNET_IDL: anchor.Idl = {
       },
     },
   ],
-} as const;
+};
 
 function u64ToLeBuffer(n: anchor.BN): Buffer {
   const b = Buffer.alloc(8);
   b.writeBigUInt64LE(BigInt(n.toString()));
   return b;
 }
-
 function findStatePda(programId: PublicKey) {
   return PublicKey.findProgramAddressSync([Buffer.from("state")], programId)[0];
 }
-
 function findVaultPda(programId: PublicKey, statePda: PublicKey) {
   return PublicKey.findProgramAddressSync([Buffer.from("vault"), statePda.toBuffer()], programId)[0];
 }
-
 function findUserTicketsPda(programId: PublicKey, user: PublicKey, epoch: anchor.BN) {
   return PublicKey.findProgramAddressSync(
     [Buffer.from("user_tickets"), user.toBuffer(), u64ToLeBuffer(epoch)],
@@ -214,7 +178,9 @@ function findUserTicketsPda(programId: PublicKey, user: PublicKey, epoch: anchor
   )[0];
 }
 
-// -------------------- Animated helpers --------------------
+/* -------------------------------------------------------
+   Anim helpers
+------------------------------------------------------- */
 function useAnimatedNumber(value: number, duration = 800) {
   const [display, setDisplay] = useState(value);
   const last = useRef(value);
@@ -233,13 +199,20 @@ function useAnimatedNumber(value: number, duration = 800) {
   }, [value, duration]);
   return display;
 }
-
-// 3D tilt wrapper (no Tailwind dependency)
-function TiltCard({ children, className = "", style = {} }: { children: React.ReactNode; className?: string; style?: React.CSSProperties }) {
+function TiltCard({
+  children,
+  className = "",
+  style = {},
+}: {
+  children: React.ReactNode;
+  className?: string;
+  style?: React.CSSProperties;
+}) {
   const ref = useRef<HTMLDivElement>(null);
   const [transform, setTransform] = useState("perspective(900px) rotateX(0) rotateY(0)");
   const onMove = (e: React.MouseEvent) => {
-    const el = ref.current; if (!el) return;
+    const el = ref.current;
+    if (!el) return;
     const r = el.getBoundingClientRect();
     const px = (e.clientX - r.left) / r.width;
     const py = (e.clientY - r.top) / r.height;
@@ -254,16 +227,22 @@ function TiltCard({ children, className = "", style = {} }: { children: React.Re
     </div>
   );
 }
-
-// Magnetic button
-function MagneticButton(
-  { children, onClick, disabled, className = "" }:
-  { children: React.ReactNode; onClick?: () => void; disabled?: boolean; className?: string }
-) {
+function MagneticButton({
+  children,
+  onClick,
+  disabled,
+  className = "",
+}: {
+  children: React.ReactNode;
+  onClick?: () => void;
+  disabled?: boolean;
+  className?: string;
+}) {
   const ref = useRef<HTMLButtonElement>(null);
   const [t, setT] = useState({ x: 0, y: 0 });
   const onMove = (e: React.MouseEvent) => {
-    const el = ref.current; if (!el) return;
+    const el = ref.current;
+    if (!el) return;
     const r = el.getBoundingClientRect();
     const x = ((e.clientX - r.left) / r.width - 0.5) * 16;
     const y = ((e.clientY - r.top) / r.height - 0.5) * 16;
@@ -286,7 +265,9 @@ function MagneticButton(
   );
 }
 
-// -------------------- Health Check (connection sanity) --------------------
+/* -------------------------------------------------------
+   Health + Cards
+------------------------------------------------------- */
 function HealthCheck({ connection }: { connection: Connection }) {
   const [ok, setOk] = useState<null | boolean>(null);
   const [msg, setMsg] = useState<string>("Checking…");
@@ -321,7 +302,6 @@ function HealthCheck({ connection }: { connection: Connection }) {
   );
 }
 
-// -------------------- UI Cards --------------------
 function PotCard({ connection }: { connection: Connection }) {
   const [balance, setBalance] = useState<number | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -329,9 +309,9 @@ function PotCard({ connection }: { connection: Connection }) {
   const refresh = useCallback(async () => {
     try {
       setErr(null);
-      if (PROGRAM_ID) {
-        const statePda = findStatePda(PROGRAM_ID);
-        const vaultPda = findVaultPda(PROGRAM_ID, statePda);
+      if (PROGRAM_ID_KEY) {
+        const statePda = findStatePda(PROGRAM_ID_KEY);
+        const vaultPda = findVaultPda(PROGRAM_ID_KEY, statePda);
         const lamports = await connection.getBalance(vaultPda, "confirmed");
         setBalance(lamports);
       } else {
@@ -359,8 +339,8 @@ function PotCard({ connection }: { connection: Connection }) {
         {balance === null ? "—" : `${formatSol(animated)} SOL`}
       </div>
       <div className="small muted">
-        {PROGRAM_ID ? (
-          <>Vault PDA: <code>{findVaultPda(PROGRAM_ID, findStatePda(PROGRAM_ID)).toBase58()}</code></>
+        {PROGRAM_ID_KEY ? (
+          <>Vault PDA: <code>{findVaultPda(PROGRAM_ID_KEY, findStatePda(PROGRAM_ID_KEY)).toBase58()}</code></>
         ) : (
           <>Escrow: <code>{ESCROW_WALLET.toBase58()}</code></>
         )}
@@ -405,7 +385,6 @@ function BuyTickets({ connection }: { connection: Connection }) {
   const [error, setError] = useState<string | null>(null);
 
   const totalSol = useMemo(() => (count <= 0 ? 0 : count * TICKET_PRICE_SOL), [count]);
-
   const preview = useMemo(() => {
     const { totalLamports, feeLamports, jackpotLamports } = computeTicketSplit(
       count,
@@ -430,25 +409,25 @@ function BuyTickets({ connection }: { connection: Connection }) {
     try {
       setLoading(true);
 
-      if (PROGRAM_ID) {
-        // ---------------- Anchor flow ----------------
+      if (PROGRAM_ID_STR && PROGRAM_ID_KEY) {
+        // -------- Anchor path (program) --------
         const provider = new anchor.AnchorProvider(
           connection as any,
           {
-            publicKey: publicKey,
+            publicKey,
             signTransaction: wallet.signTransaction!,
             signAllTransactions: wallet.signAllTransactions!,
           } as unknown as anchor.Wallet,
           { commitment: "confirmed" }
         );
-        const program = new anchor.Program(VOLTNET_IDL as anchor.Idl, PROGRAM_ID, provider);
+        const program = new anchor.Program(VOLTNET_IDL as any, PROGRAM_ID_STR, provider);
 
-        const statePda = findStatePda(PROGRAM_ID);
-        const vaultPda = findVaultPda(PROGRAM_ID, statePda);
+        const statePda = findStatePda(PROGRAM_ID_KEY);
+        const vaultPda = findVaultPda(PROGRAM_ID_KEY, statePda);
 
-        const state = (await program.account.lotteryState.fetch(statePda)) as any;
+        const state = await (program.account as any).lotteryState.fetch(statePda);
         const epoch: anchor.BN = new anchor.BN(state.epoch.toString());
-        const userTicketsPda = findUserTicketsPda(PROGRAM_ID, publicKey, epoch);
+        const userTicketsPda = findUserTicketsPda(PROGRAM_ID_KEY, publicKey, epoch);
 
         const sig = await program.methods
           .buyTickets(new anchor.BN(count))
@@ -464,7 +443,7 @@ function BuyTickets({ connection }: { connection: Connection }) {
 
         setTxSig(sig);
       } else {
-        // --------------- Fallback MVP transfer ---------------
+        // -------- Fallback MVP: simple transfer (escrow) --------
         const lamports = toLamports(totalSol);
         const tx = new Transaction().add(
           SystemProgram.transfer({ fromPubkey: publicKey, toPubkey: ESCROW_WALLET, lamports })
@@ -491,7 +470,13 @@ function BuyTickets({ connection }: { connection: Connection }) {
       <div className="grid-3">
         <div>
           <div className="label">Count</div>
-          <input type="number" min={1} value={count} onChange={(e) => setCount(parseInt(e.target.value || "1"))} className="input" />
+          <input
+            type="number"
+            min={1}
+            value={count}
+            onChange={(e) => setCount(parseInt(e.target.value || "1"))}
+            className="input"
+          />
         </div>
         <div>
           <div className="label">Unit price</div>
@@ -499,7 +484,9 @@ function BuyTickets({ connection }: { connection: Connection }) {
         </div>
         <div>
           <div className="label">Total</div>
-          <div className="input strong">{totalSol.toLocaleString(undefined, { maximumFractionDigits: 4 })} SOL</div>
+          <div className="input strong">
+            {totalSol.toLocaleString(undefined, { maximumFractionDigits: 4 })} SOL
+          </div>
         </div>
       </div>
 
@@ -511,19 +498,34 @@ function BuyTickets({ connection }: { connection: Connection }) {
 
       <div className="mt-16" />
       <MagneticButton onClick={onBuy} disabled={loading} className="w-full">
-        {loading ? "Sending…" : PROGRAM_ID ? "Buy (Program)" : "Buy"}
+        {loading ? "Sending…" : PROGRAM_ID_STR ? "Buy (Program)" : "Buy"}
       </MagneticButton>
 
       <AnimatePresence>
         {txSig && (
-          <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 6 }} className="success mt-12">
-            ✅ Purchase sent. Tx: {" "}
-            <a className="link" href={`https://explorer.solana.com/tx/${txSig}${explorerParam}`} target="_blank" rel="noreferrer">view on Explorer</a>
+          <motion.div
+            initial={{ opacity: 0, y: 6 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 6 }}
+            className="success mt-12"
+          >
+            ✅ Purchase sent. Tx:{" "}
+            <a
+              className="link"
+              href={`https://explorer.solana.com/tx/${txSig}${explorerParam}`}
+              target="_blank"
+              rel="noreferrer"
+            >
+              view on Explorer
+            </a>
           </motion.div>
         )}
       </AnimatePresence>
       {error && <div className="error mt-12">❌ {error}</div>}
-      <div className="small muted mt-12">By purchasing, you accept the Terms & Rules. No guarantee of winnings. Fees are displayed above.</div>
+      <div className="small muted mt-12">
+        By purchasing, you accept the Terms & Rules. No guarantee of winnings. Fees are displayed
+        above.
+      </div>
     </TiltCard>
   );
 }
@@ -565,7 +567,9 @@ function Header() {
   );
 }
 
-// Background: starfield + neon grid + floating balls + solana coin
+/* -------------------------------------------------------
+   Background FX
+------------------------------------------------------- */
 function BackgroundFX() {
   const balls = useMemo(() => [7, 13, 23, 42].map((n, i) => ({ n, d: 6 + i * 1.3 })), []);
   return (
@@ -575,16 +579,31 @@ function BackgroundFX() {
       <div className="aurora aurora-2" />
       <div className="grid" />
       {balls.map((b, idx) => (
-        <motion.div key={idx} className="ball" style={{ left: `${10 + idx * 20}%`, top: `${20 + (idx % 2) * 25}%` }} animate={{ y: [0, -22, 0] }} transition={{ repeat: Infinity, duration: b.d, ease: "easeInOut" }}>
+        <motion.div
+          key={idx}
+          className="ball"
+          style={{ left: `${10 + idx * 20}%`, top: `${20 + (idx % 2) * 25}%` }}
+          animate={{ y: [0, -22, 0] }}
+          transition={{ repeat: Infinity, duration: b.d, ease: "easeInOut" }}
+        >
           {b.n}
         </motion.div>
       ))}
-      <motion.div className="coin" initial={{ rotate: 0 }} animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: 18, ease: "linear" }}>◎</motion.div>
+      <motion.div
+        className="coin"
+        initial={{ rotate: 0 }}
+        animate={{ rotate: 360 }}
+        transition={{ repeat: Infinity, duration: 18, ease: "linear" }}
+      >
+        ◎
+      </motion.div>
     </div>
   );
 }
 
-// -------------------- Screens --------------------
+/* -------------------------------------------------------
+   Screens
+------------------------------------------------------- */
 function Landing() {
   return (
     <div className="screen">
@@ -592,17 +611,34 @@ function Landing() {
       <div className="container">
         <Header />
         <div className="hero">
-          <motion.h1 initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.6 }} className="hero-title">
-            The fairest on‑chain Lottery
+          <motion.h1
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.6 }}
+            className="hero-title"
+          >
+            The fairest on-chain Lottery
           </motion.h1>
-          <motion.p initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.05, duration: 0.6 }} className="hero-sub">
-            Buy tickets. Grow the jackpot. A provably‑fair draw picks the winner. Built on <span className="solana">Solana</span>.
+          <motion.p
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.05, duration: 0.6 }}
+            className="hero-sub"
+          >
+            Buy tickets. Grow the jackpot. A provably-fair draw picks the winner. Built on{" "}
+            <span className="solana">Solana</span>.
           </motion.p>
 
           <div className="features">
-            <div className="feature"><span>⚡</span> Instant finality</div>
-            <div className="feature"><span>🔒</span> Non‑custodial vault (PDA)</div>
-            <div className="feature"><span>💎</span> Transparent fees</div>
+            <div className="feature">
+              <span>⚡</span> Instant finality
+            </div>
+            <div className="feature">
+              <span>🔒</span> Non-custodial vault (PDA)
+            </div>
+            <div className="feature">
+              <span>💎</span> Transparent fees
+            </div>
           </div>
 
           <div className="cta">
@@ -611,7 +647,9 @@ function Landing() {
 
           <div className="note">Connect your wallet to see the live pot & buy tickets.</div>
         </div>
-        <footer className="footer">© {new Date().getFullYear()} VoltNet — Built on Solana ({CLUSTER})</footer>
+        <footer className="footer">
+          © {new Date().getFullYear()} VoltNet — Built on Solana ({CLUSTER})
+        </footer>
       </div>
     </div>
   );
@@ -626,7 +664,8 @@ function Dashboard() {
         <Header />
 
         <div className="subinfo">
-          <strong>Network:</strong> {CLUSTER} · <strong>Program:</strong> {PROGRAM_ID ? PROGRAM_ID.toBase58() : "(fallback transfer mode)"}
+          <strong>Network:</strong> {CLUSTER} · <strong>Program:</strong>{" "}
+          {PROGRAM_ID_STR || "(fallback transfer mode)"}
         </div>
 
         <div className="grid-main">
@@ -641,7 +680,9 @@ function Dashboard() {
           </div>
         </div>
 
-        <footer className="footer">© {new Date().getFullYear()} VoltNet — Built on Solana ({CLUSTER})</footer>
+        <footer className="footer">
+          © {new Date().getFullYear()} VoltNet — Built on Solana ({CLUSTER})
+        </footer>
       </div>
     </div>
   );
@@ -652,6 +693,9 @@ function Gate() {
   return publicKey ? <Dashboard /> : <Landing />;
 }
 
+/* -------------------------------------------------------
+   App
+------------------------------------------------------- */
 export default function App() {
   const wallets = useMemo(() => [new PhantomWalletAdapter(), new SolflareWalletAdapter()], []);
   return (

@@ -1,4 +1,3 @@
-// src/App.tsx
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ConnectionProvider, WalletProvider, useWallet } from "@solana/wallet-adapter-react";
 import { WalletModalProvider, WalletMultiButton } from "@solana/wallet-adapter-react-ui";
@@ -16,9 +15,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import confetti from "canvas-confetti";
 import "@solana/wallet-adapter-react-ui/styles.css";
 
-/* -------------------------------------------------------
-   Polyfills (vite/browser)
-------------------------------------------------------- */
+// ---------- Polyfills Buffer/global (Vite) ----------
 import { Buffer } from "buffer";
 if (typeof globalThis !== "undefined") {
   // @ts-ignore
@@ -29,9 +26,7 @@ if (typeof globalThis !== "undefined") {
   globalThis.process = globalThis.process || { env: {} };
 }
 
-/* -------------------------------------------------------
-   CONFIG (env)
-------------------------------------------------------- */
+// ---------- Config ----------
 type SupportedCluster = "devnet" | "mainnet-beta";
 const CLUSTER: SupportedCluster =
   (import.meta.env.VITE_SOLANA_CLUSTER as SupportedCluster) || "devnet";
@@ -40,10 +35,10 @@ const DEFAULT_ENDPOINT = clusterApiUrl(CLUSTER);
 const RPC_ENDPOINT: string =
   (import.meta.env.VITE_SOLANA_RPC as string) || DEFAULT_ENDPOINT || "https://api.devnet.solana.com";
 
-const PROGRAM_ID_STR = (import.meta.env.VITE_PROGRAM_ID as string) || ""; // string only (évite l’overload TS)
-const PROGRAM_ID_KEY: PublicKey | null = PROGRAM_ID_STR ? new PublicKey(PROGRAM_ID_STR) : null;
+const PROGRAM_ID_STR = (import.meta.env.VITE_PROGRAM_ID as string) || "";
+const PROGRAM_ID = PROGRAM_ID_STR ? new PublicKey(PROGRAM_ID_STR) : null;
 
-const ESCROW_WALLET = new PublicKey("4ZubhYsJvTLeVtggbtf5qw8oHmXBG4xDrzkZuracGSaa");
+const ESCROW_WALLET = new PublicKey("4ZubhYsJvTLeVtggbtf5qw8oHmXBG4xDrzkZuracGSaa"); // fallback (sans programme)
 const TREASURY_PUBKEY = new PublicKey(
   (import.meta.env.VITE_TREASURY_PUBKEY as string) || "4ZubhYsJvTLeVtggbtf5qw8oHmXBG4xDrzkZuracGSaa"
 );
@@ -59,52 +54,44 @@ const FEES = {
   BUYBACK_BPS_OF_TREASURY: Number(import.meta.env.VITE_BUYBACK_BPS_OF_TREASURY ?? 0),
 };
 
-/* -------------------------------------------------------
-   Utils
-------------------------------------------------------- */
+// ---------- Utils ----------
 function formatSol(lamports: number) {
   return (lamports / LAMPORTS_PER_SOL).toLocaleString(undefined, { maximumFractionDigits: 4 });
 }
-function toLamports(sol: number) {
-  return Math.round(sol * LAMPORTS_PER_SOL);
-}
+function toLamports(sol: number) { return Math.round(sol * LAMPORTS_PER_SOL); }
 function endOfCurrentMonth(): Date {
-  const now = new Date();
-  return new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
+  const now = new Date(); return new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
 }
 function useCountdown(target: Date) {
   const [, setTick] = useState(0);
-  useEffect(() => {
-    const t = setInterval(() => setTick((v) => v + 1), 1000);
-    return () => clearInterval(t);
-  }, []);
+  useEffect(() => { const t = setInterval(() => setTick(v => v + 1), 1000); return () => clearInterval(t); }, []);
   const diff = Math.max(0, target.getTime() - Date.now());
   const s = Math.floor(diff / 1000);
-  const d = Math.floor(s / 86400);
-  const h = Math.floor((s % 86400) / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  const sec = s % 60;
+  const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
   return { d, h, m, s: sec };
 }
-function clusterQueryParam(cluster: SupportedCluster) {
-  return cluster === "mainnet-beta" ? "" : `?cluster=${cluster}`;
-}
-function bps(amountLamports: number, bpsValue: number) {
-  return Math.floor((amountLamports * bpsValue) / 10_000);
-}
+function clusterQueryParam(cluster: SupportedCluster) { return cluster === "mainnet-beta" ? "" : `?cluster=${cluster}`; }
+function bps(amountLamports: number, bpsValue: number) { return Math.floor((amountLamports * bpsValue) / 10_000); }
 function computeTicketSplit(count: number, unitPriceSol: number, platformFeeBps: number) {
   const totalLamports = toLamports(count * unitPriceSol);
   const feeLamports = bps(totalLamports, platformFeeBps);
   const jackpotLamports = totalLamports - feeLamports;
   return { totalLamports, feeLamports, jackpotLamports };
 }
+function u64ToLeBuffer(n: anchor.BN): Buffer { const b = Buffer.alloc(8); b.writeBigUInt64LE(BigInt(n.toString())); return b; }
+function findStatePda(programId: PublicKey) { return PublicKey.findProgramAddressSync([Buffer.from("state")], programId)[0]; }
+function findVaultPda(programId: PublicKey, statePda: PublicKey) {
+  return PublicKey.findProgramAddressSync([Buffer.from("vault"), statePda.toBuffer()], programId)[0];
+}
+function findUserTicketsPda(programId: PublicKey, user: PublicKey, epoch: anchor.BN) {
+  return PublicKey.findProgramAddressSync([Buffer.from("user_tickets"), user.toBuffer(), u64ToLeBuffer(epoch)], programId)[0];
+}
 
-/* -------------------------------------------------------
-   Anchor helpers — IDL minimal (typé any pour éviter TS)
-------------------------------------------------------- */
+// ---------- IDL minimal (typé any + adresse) ----------
 const VOLTNET_IDL: any = {
   version: "0.1.0",
   name: "voltnet_lottery",
+  metadata: { address: PROGRAM_ID_STR }, // ✅ permet le constructeur Program(idl, provider)
   instructions: [
     {
       name: "buyTickets",
@@ -160,190 +147,80 @@ const VOLTNET_IDL: any = {
   ],
 };
 
-function u64ToLeBuffer(n: anchor.BN): Buffer {
-  const b = Buffer.alloc(8);
-  b.writeBigUInt64LE(BigInt(n.toString()));
-  return b;
-}
-function findStatePda(programId: PublicKey) {
-  return PublicKey.findProgramAddressSync([Buffer.from("state")], programId)[0];
-}
-function findVaultPda(programId: PublicKey, statePda: PublicKey) {
-  return PublicKey.findProgramAddressSync([Buffer.from("vault"), statePda.toBuffer()], programId)[0];
-}
-function findUserTicketsPda(programId: PublicKey, user: PublicKey, epoch: anchor.BN) {
-  return PublicKey.findProgramAddressSync(
-    [Buffer.from("user_tickets"), user.toBuffer(), u64ToLeBuffer(epoch)],
-    programId
-  )[0];
-}
-
-/* -------------------------------------------------------
-   Anim helpers
-------------------------------------------------------- */
+// ---------- Anim helpers ----------
 function useAnimatedNumber(value: number, duration = 800) {
-  const [display, setDisplay] = useState(value);
-  const last = useRef(value);
+  const [display, setDisplay] = useState(value); const last = useRef(value);
   useEffect(() => {
-    const start = performance.now();
-    const from = last.current;
-    const to = value;
-    const raf = (t: number) => {
-      const p = Math.min(1, (t - start) / duration);
-      const eased = 1 - Math.pow(1 - p, 3);
-      setDisplay(from + (to - from) * eased);
-      if (p < 1) requestAnimationFrame(raf);
-    };
-    requestAnimationFrame(raf);
-    last.current = value;
+    const start = performance.now(), from = last.current, to = value;
+    const raf = (t: number) => { const p = Math.min(1, (t - start) / duration); const eased = 1 - Math.pow(1 - p, 3); setDisplay(from + (to - from) * eased); if (p < 1) requestAnimationFrame(raf); };
+    requestAnimationFrame(raf); last.current = value;
   }, [value, duration]);
   return display;
 }
-function TiltCard({
-  children,
-  className = "",
-  style = {},
-}: {
-  children: React.ReactNode;
-  className?: string;
-  style?: React.CSSProperties;
-}) {
-  const ref = useRef<HTMLDivElement>(null);
-  const [transform, setTransform] = useState("perspective(900px) rotateX(0) rotateY(0)");
-  const onMove = (e: React.MouseEvent) => {
-    const el = ref.current;
-    if (!el) return;
-    const r = el.getBoundingClientRect();
-    const px = (e.clientX - r.left) / r.width;
-    const py = (e.clientY - r.top) / r.height;
-    const rotY = (px - 0.5) * 10;
-    const rotX = (0.5 - py) * 10;
-    setTransform(`perspective(900px) rotateX(${rotX}deg) rotateY(${rotY}deg)`);
-  };
+function TiltCard({ children, className = "", style = {} }: { children: React.ReactNode; className?: string; style?: React.CSSProperties }) {
+  const ref = useRef<HTMLDivElement>(null); const [transform, setTransform] = useState("perspective(900px) rotateX(0) rotateY(0)");
+  const onMove = (e: React.MouseEvent) => { const el = ref.current; if (!el) return; const r = el.getBoundingClientRect(); const px = (e.clientX - r.left) / r.width; const py = (e.clientY - r.top) / r.height; const rotY = (px - .5) * 10; const rotX = (.5 - py) * 10; setTransform(`perspective(900px) rotateX(${rotX}deg) rotateY(${rotY}deg)`); };
   const onLeave = () => setTransform("perspective(900px) rotateX(0) rotateY(0)");
-  return (
-    <div ref={ref} onMouseMove={onMove} onMouseLeave={onLeave} className={"card " + className} style={{ ...style, transform }}>
-      {children}
-    </div>
-  );
+  return <div ref={ref} onMouseMove={onMove} onMouseLeave={onLeave} className={"card " + className} style={{ ...style, transform }}>{children}</div>;
 }
-function MagneticButton({
-  children,
-  onClick,
-  disabled,
-  className = "",
-}: {
-  children: React.ReactNode;
-  onClick?: () => void;
-  disabled?: boolean;
-  className?: string;
-}) {
-  const ref = useRef<HTMLButtonElement>(null);
-  const [t, setT] = useState({ x: 0, y: 0 });
-  const onMove = (e: React.MouseEvent) => {
-    const el = ref.current;
-    if (!el) return;
-    const r = el.getBoundingClientRect();
-    const x = ((e.clientX - r.left) / r.width - 0.5) * 16;
-    const y = ((e.clientY - r.top) / r.height - 0.5) * 16;
-    setT({ x, y });
-  };
+function MagneticButton({ children, onClick, disabled, className = "" }: { children: React.ReactNode; onClick?: () => void; disabled?: boolean; className?: string }) {
+  const ref = useRef<HTMLButtonElement>(null); const [t, setT] = useState({ x: 0, y: 0 });
+  const onMove = (e: React.MouseEvent) => { const el = ref.current; if (!el) return; const r = el.getBoundingClientRect(); const x = ((e.clientX - r.left) / r.width - .5) * 16; const y = ((e.clientY - r.top) / r.height - .5) * 16; setT({ x, y }); };
   const onLeave = () => setT({ x: 0, y: 0 });
   return (
-    <button
-      ref={ref}
-      onMouseMove={onMove}
-      onMouseLeave={onLeave}
-      onClick={onClick}
-      disabled={disabled}
-      style={{ transform: `translate(${t.x}px, ${t.y}px)` }}
-      className={"btn " + className + (disabled ? " btn-disabled" : "")}
-    >
-      <span className="btn-shine" />
-      {children}
+    <button ref={ref} onMouseMove={onMove} onMouseLeave={onLeave} onClick={onClick} disabled={disabled}
+      style={{ transform: `translate(${t.x}px, ${t.y}px)` }} className={"btn " + className + (disabled ? " btn-disabled" : "")}>
+      <span className="btn-shine" />{children}
     </button>
   );
 }
 
-/* -------------------------------------------------------
-   Health + Cards
-------------------------------------------------------- */
+// ---------- Health check ----------
 function HealthCheck({ connection }: { connection: Connection }) {
   const [ok, setOk] = useState<null | boolean>(null);
   const [msg, setMsg] = useState<string>("Checking…");
-
   const run = useCallback(async () => {
     try {
-      const [ver, { blockhash }] = await Promise.all([
-        connection.getVersion(),
-        connection.getLatestBlockhash("confirmed"),
-      ]);
-      setOk(true);
-      setMsg(`RPC OK • ${ver["solana-core"] || "?"} • ${blockhash.slice(0, 8)}…`);
-    } catch (e: any) {
-      setOk(false);
-      setMsg(`RPC error • ${e?.message || String(e)}`);
-    }
+      const [ver, { blockhash }] = await Promise.all([connection.getVersion(), connection.getLatestBlockhash("confirmed")]);
+      setOk(true); setMsg(`RPC OK • ${ver["solana-core"] || "?"} • ${blockhash.slice(0, 8)}…`);
+    } catch (e: any) { setOk(false); setMsg(`RPC error • ${e?.message || String(e)}`); }
   }, [connection]);
-
-  useEffect(() => {
-    run();
-    const id = setInterval(run, 15000);
-    return () => clearInterval(id);
-  }, [run]);
-
+  useEffect(() => { run(); const id = setInterval(run, 15000); return () => clearInterval(id); }, [run]);
   return (
     <div className={`chip ${ok === null ? "chip-muted" : ok ? "chip-good" : "chip-bad"}`}>
-      <div>
-        <strong>RPC ({CLUSTER})</strong> → <code>{RPC_ENDPOINT}</code>
-      </div>
+      <div><strong>RPC ({CLUSTER})</strong> → <code>{RPC_ENDPOINT}</code></div>
       <div className="chip-sub">{msg}</div>
     </div>
   );
 }
 
+// ---------- Cards ----------
 function PotCard({ connection }: { connection: Connection }) {
   const [balance, setBalance] = useState<number | null>(null);
   const [err, setErr] = useState<string | null>(null);
-
   const refresh = useCallback(async () => {
     try {
       setErr(null);
-      if (PROGRAM_ID_KEY) {
-        const statePda = findStatePda(PROGRAM_ID_KEY);
-        const vaultPda = findVaultPda(PROGRAM_ID_KEY, statePda);
+      if (PROGRAM_ID) {
+        const statePda = findStatePda(PROGRAM_ID);
+        const vaultPda = findVaultPda(PROGRAM_ID, statePda);
         const lamports = await connection.getBalance(vaultPda, "confirmed");
         setBalance(lamports);
       } else {
         const lamports = await connection.getBalance(ESCROW_WALLET, "confirmed");
         setBalance(lamports);
       }
-    } catch (e: any) {
-      console.error(e);
-      setErr(e?.message || String(e));
-    }
+    } catch (e: any) { setErr(e?.message || String(e)); }
   }, [connection]);
-
-  useEffect(() => {
-    refresh();
-    const id = setInterval(refresh, 6000);
-    return () => clearInterval(id);
-  }, [refresh]);
-
+  useEffect(() => { refresh(); const id = setInterval(refresh, 6000); return () => clearInterval(id); }, [refresh]);
   const animated = useAnimatedNumber(balance ?? 0);
-
   return (
     <TiltCard>
       <div className="card-title">Current Jackpot</div>
-      <div className="jackpot">
-        {balance === null ? "—" : `${formatSol(animated)} SOL`}
-      </div>
+      <div className="jackpot">{balance === null ? "—" : `${formatSol(animated)} SOL`}</div>
       <div className="small muted">
-        {PROGRAM_ID_KEY ? (
-          <>Vault PDA: <code>{findVaultPda(PROGRAM_ID_KEY, findStatePda(PROGRAM_ID_KEY)).toBase58()}</code></>
-        ) : (
-          <>Escrow: <code>{ESCROW_WALLET.toBase58()}</code></>
-        )}
+        {PROGRAM_ID ? <>Vault PDA: <code>{findVaultPda(PROGRAM_ID, findStatePda(PROGRAM_ID)).toBase58()}</code></>
+                    : <>Escrow: <code>{ESCROW_WALLET.toBase58()}</code></>}
       </div>
       <div className="mt-16" />
       <button onClick={refresh} className="btn btn-secondary">Refresh</button>
@@ -351,25 +228,20 @@ function PotCard({ connection }: { connection: Connection }) {
     </TiltCard>
   );
 }
-
 function FeePolicyCard() {
-  const totalBpsAtPurchase = FEES.PLATFORM_FEE_BPS;
-  const totalBpsAtPayout = FEES.RAKE_AT_PAYOUT_BPS;
-  const withdrawalBps = FEES.WITHDRAWAL_FEE_BPS;
   const buybackInfo =
     FEES.BUYBACK_BPS_OF_TREASURY > 0
       ? `${FEES.BUYBACK_BPS_OF_TREASURY / 100}% of treasury used for buyback (off-chain policy)`
       : `Treasury may perform buybacks (off-chain policy)`;
-
   return (
     <TiltCard>
       <div className="card-title">Transparent Fee Policy</div>
       <ul className="list">
-        <li>Platform fee per ticket: <strong>{totalBpsAtPurchase / 100}%</strong> → Treasury (VoltNet).</li>
-        <li>Rake at payout (from jackpot): <strong>{totalBpsAtPayout / 100}%</strong> → Treasury.</li>
+        <li>Platform fee per ticket: <strong>{FEES.PLATFORM_FEE_BPS / 100}%</strong> → Treasury.</li>
+        <li>Rake at payout (from jackpot): <strong>{FEES.RAKE_AT_PAYOUT_BPS / 100}%</strong> → Treasury.</li>
         <li>Ticket split = Jackpot + Platform fee at purchase.</li>
         <li>Buyback & burn: {buybackInfo}.</li>
-        <li>Winner withdrawal fee: <strong>{withdrawalBps / 100}%</strong> (network & service).</li>
+        <li>Winner withdrawal fee: <strong>{FEES.WITHDRAWAL_FEE_BPS / 100}%</strong>.</li>
       </ul>
       <div className="small muted mt-8">Exact enforcement is on-chain (Anchor program + PDA vault). VRF guarantees unbiased draws.</div>
     </TiltCard>
@@ -387,30 +259,20 @@ function BuyTickets({ connection }: { connection: Connection }) {
   const totalSol = useMemo(() => (count <= 0 ? 0 : count * TICKET_PRICE_SOL), [count]);
   const preview = useMemo(() => {
     const { totalLamports, feeLamports, jackpotLamports } = computeTicketSplit(
-      count,
-      TICKET_PRICE_SOL,
-      FEES.PLATFORM_FEE_BPS
+      count, TICKET_PRICE_SOL, FEES.PLATFORM_FEE_BPS
     );
     return { totalLamports, feeLamports, jackpotLamports };
   }, [count]);
 
   const onBuy = useCallback(async () => {
-    setError(null);
-    setTxSig(null);
-    if (!publicKey) {
-      setError("Connect your wallet first.");
-      return;
-    }
-    if (count <= 0) {
-      setError("Invalid ticket count.");
-      return;
-    }
+    setError(null); setTxSig(null);
+    if (!publicKey) { setError("Connecte ton wallet d’abord."); return; }
+    if (count <= 0) { setError("Quantité invalide."); return; }
 
     try {
       setLoading(true);
-
-      if (PROGRAM_ID_STR && PROGRAM_ID_KEY) {
-        // -------- Anchor path (program) --------
+      if (PROGRAM_ID) {
+        // ------- Flow Anchor (constructor à 2 args) -------
         const provider = new anchor.AnchorProvider(
           connection as any,
           {
@@ -420,16 +282,16 @@ function BuyTickets({ connection }: { connection: Connection }) {
           } as unknown as anchor.Wallet,
           { commitment: "confirmed" }
         );
-        const program = new anchor.Program(VOLTNET_IDL as any, PROGRAM_ID_STR, provider);
+        const program = new (anchor as any).Program(VOLTNET_IDL as any, provider as any); // ✅
 
-        const statePda = findStatePda(PROGRAM_ID_KEY);
-        const vaultPda = findVaultPda(PROGRAM_ID_KEY, statePda);
+        const statePda = findStatePda(PROGRAM_ID);
+        const vaultPda = findVaultPda(PROGRAM_ID, statePda);
 
-        const state = await (program.account as any).lotteryState.fetch(statePda);
+        const state = await ((program as any).account as any)["lotteryState"].fetch(statePda);
         const epoch: anchor.BN = new anchor.BN(state.epoch.toString());
-        const userTicketsPda = findUserTicketsPda(PROGRAM_ID_KEY, publicKey, epoch);
+        const userTicketsPda = findUserTicketsPda(PROGRAM_ID, publicKey, epoch);
 
-        const sig = await program.methods
+        const sig = await (program as any).methods
           .buyTickets(new anchor.BN(count))
           .accounts({
             user: publicKey,
@@ -443,7 +305,7 @@ function BuyTickets({ connection }: { connection: Connection }) {
 
         setTxSig(sig);
       } else {
-        // -------- Fallback MVP: simple transfer (escrow) --------
+        // ------- Fallback transfert simple -------
         const lamports = toLamports(totalSol);
         const tx = new Transaction().add(
           SystemProgram.transfer({ fromPubkey: publicKey, toPubkey: ESCROW_WALLET, lamports })
@@ -452,14 +314,9 @@ function BuyTickets({ connection }: { connection: Connection }) {
         const sig = await sendTransaction(tx, connection);
         setTxSig(sig);
       }
-
-      confetti({ particleCount: 120, spread: 70, origin: { y: 0.7 } });
-    } catch (e: any) {
-      console.error(e);
-      setError(e?.message ?? "Transaction failed");
-    } finally {
-      setLoading(false);
-    }
+      confetti({ particleCount: 140, spread: 70, origin: { y: 0.7 } });
+    } catch (e: any) { setError(e?.message ?? "Échec de la transaction"); }
+    finally { setLoading(false); }
   }, [publicKey, count, totalSol, connection, wallet]);
 
   const explorerParam = clusterQueryParam(CLUSTER);
@@ -470,24 +327,11 @@ function BuyTickets({ connection }: { connection: Connection }) {
       <div className="grid-3">
         <div>
           <div className="label">Count</div>
-          <input
-            type="number"
-            min={1}
-            value={count}
-            onChange={(e) => setCount(parseInt(e.target.value || "1"))}
-            className="input"
-          />
+          <input type="number" min={1} value={count}
+            onChange={(e) => setCount(parseInt(e.target.value || "1"))} className="input" />
         </div>
-        <div>
-          <div className="label">Unit price</div>
-          <div className="input muted">{TICKET_PRICE_SOL} SOL</div>
-        </div>
-        <div>
-          <div className="label">Total</div>
-          <div className="input strong">
-            {totalSol.toLocaleString(undefined, { maximumFractionDigits: 4 })} SOL
-          </div>
-        </div>
+        <div><div className="label">Unit price</div><div className="input muted">{TICKET_PRICE_SOL} SOL</div></div>
+        <div><div className="label">Total</div><div className="input strong">{totalSol.toLocaleString(undefined,{maximumFractionDigits:4})} SOL</div></div>
       </div>
 
       <div className="small muted mt-8">
@@ -498,34 +342,21 @@ function BuyTickets({ connection }: { connection: Connection }) {
 
       <div className="mt-16" />
       <MagneticButton onClick={onBuy} disabled={loading} className="w-full">
-        {loading ? "Sending…" : PROGRAM_ID_STR ? "Buy (Program)" : "Buy"}
+        {loading ? "Envoi…" : PROGRAM_ID ? "Buy (Program)" : "Buy"}
       </MagneticButton>
 
       <AnimatePresence>
         {txSig && (
-          <motion.div
-            initial={{ opacity: 0, y: 6 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: 6 }}
-            className="success mt-12"
-          >
-            ✅ Purchase sent. Tx:{" "}
-            <a
-              className="link"
-              href={`https://explorer.solana.com/tx/${txSig}${explorerParam}`}
-              target="_blank"
-              rel="noreferrer"
-            >
-              view on Explorer
+          <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 6 }} className="success mt-12">
+            ✅ Tx envoyée :{" "}
+            <a className="link" href={`https://explorer.solana.com/tx/${txSig}${explorerParam}`} target="_blank" rel="noreferrer">
+              voir dans l’Explorer
             </a>
           </motion.div>
         )}
       </AnimatePresence>
       {error && <div className="error mt-12">❌ {error}</div>}
-      <div className="small muted mt-12">
-        By purchasing, you accept the Terms & Rules. No guarantee of winnings. Fees are displayed
-        above.
-      </div>
+      <div className="small muted mt-12">En achetant vous acceptez les règles. Aucune garantie de gains. Les frais sont affichés ci-dessus.</div>
     </TiltCard>
   );
 }
@@ -534,76 +365,42 @@ function Countdown() {
   const end = useMemo(() => endOfCurrentMonth(), []);
   const { d, h, m, s } = useCountdown(end);
   const Box = ({ v, label }: { v: number; label: string }) => (
-    <div className="countbox">
-      <div className="countnum">{String(v).padStart(2, "0")}</div>
-      <div className="countlbl">{label}</div>
-    </div>
+    <div className="countbox"><div className="countnum">{String(v).padStart(2, "0")}</div><div className="countlbl">{label}</div></div>
   );
-
   return (
     <TiltCard>
       <div className="label">Next draw</div>
       <div className="card-title">End of month</div>
-      <div className="countgrid">
-        <Box v={d} label="Days" />
-        <Box v={h} label="Hours" />
-        <Box v={m} label="Min" />
-        <Box v={s} label="Sec" />
-      </div>
+      <div className="countgrid"><Box v={d} label="Days" /><Box v={h} label="Hours" /><Box v={m} label="Min" /><Box v={s} label="Sec" /></div>
       <div className="small muted mt-12">Winner receives 50% of the pot. Rollover keeps 50%.</div>
     </TiltCard>
   );
 }
-
 function Header() {
   return (
     <header className="header">
-      <div className="brand">
-        <div className="logo">⚡</div>
-        <div className="brandtxt">VoltNet Lottery</div>
-      </div>
+      <div className="brand"><div className="logo">⚡</div><div className="brandtxt">VoltNet Lottery</div></div>
       <WalletMultiButton className="walletbtn" />
     </header>
   );
 }
-
-/* -------------------------------------------------------
-   Background FX
-------------------------------------------------------- */
 function BackgroundFX() {
   const balls = useMemo(() => [7, 13, 23, 42].map((n, i) => ({ n, d: 6 + i * 1.3 })), []);
   return (
     <div className="bgfx" aria-hidden>
-      <div className="stars" />
-      <div className="aurora aurora-1" />
-      <div className="aurora aurora-2" />
-      <div className="grid" />
+      <div className="stars" /><div className="aurora aurora-1" /><div className="aurora aurora-2" /><div className="grid" />
       {balls.map((b, idx) => (
-        <motion.div
-          key={idx}
-          className="ball"
-          style={{ left: `${10 + idx * 20}%`, top: `${20 + (idx % 2) * 25}%` }}
-          animate={{ y: [0, -22, 0] }}
-          transition={{ repeat: Infinity, duration: b.d, ease: "easeInOut" }}
-        >
+        <motion.div key={idx} className="ball" style={{ left: `${10 + idx * 20}%`, top: `${20 + (idx % 2) * 25}%` }}
+          animate={{ y: [0, -22, 0] }} transition={{ repeat: Infinity, duration: b.d, ease: "easeInOut" }}>
           {b.n}
         </motion.div>
       ))}
-      <motion.div
-        className="coin"
-        initial={{ rotate: 0 }}
-        animate={{ rotate: 360 }}
-        transition={{ repeat: Infinity, duration: 18, ease: "linear" }}
-      >
-        ◎
-      </motion.div>
+      <motion.div className="coin" initial={{ rotate: 0 }} animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: 18, ease: "linear" }}>◎</motion.div>
     </div>
   );
 }
 
-/* -------------------------------------------------------
-   Screens
-------------------------------------------------------- */
+// ---------- Screens ----------
 function Landing() {
   return (
     <div className="screen">
@@ -611,50 +408,25 @@ function Landing() {
       <div className="container">
         <Header />
         <div className="hero">
-          <motion.h1
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.6 }}
-            className="hero-title"
-          >
+          <motion.h1 initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.6 }} className="hero-title">
             The fairest on-chain Lottery
           </motion.h1>
-          <motion.p
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.05, duration: 0.6 }}
-            className="hero-sub"
-          >
-            Buy tickets. Grow the jackpot. A provably-fair draw picks the winner. Built on{" "}
-            <span className="solana">Solana</span>.
+          <motion.p initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.05, duration: 0.6 }} className="hero-sub">
+            Buy tickets. Grow the jackpot. A provably-fair draw picks the winner. Built on <span className="solana">Solana</span>.
           </motion.p>
-
           <div className="features">
-            <div className="feature">
-              <span>⚡</span> Instant finality
-            </div>
-            <div className="feature">
-              <span>🔒</span> Non-custodial vault (PDA)
-            </div>
-            <div className="feature">
-              <span>💎</span> Transparent fees
-            </div>
+            <div className="feature"><span>⚡</span> Instant finality</div>
+            <div className="feature"><span>🔒</span> Non-custodial vault (PDA)</div>
+            <div className="feature"><span>💎</span> Transparent fees</div>
           </div>
-
-          <div className="cta">
-            <WalletMultiButton className="cta-btn" />
-          </div>
-
-          <div className="note">Connect your wallet to see the live pot & buy tickets.</div>
+          <div className="cta"><WalletMultiButton className="cta-btn" /></div>
+          <div className="note">Connecte ton wallet pour voir le pot en temps réel et acheter des tickets.</div>
         </div>
-        <footer className="footer">
-          © {new Date().getFullYear()} VoltNet — Built on Solana ({CLUSTER})
-        </footer>
+        <footer className="footer">© {new Date().getFullYear()} VoltNet — Built on Solana ({CLUSTER})</footer>
       </div>
     </div>
   );
 }
-
 function Dashboard() {
   const connection = useMemo(() => new Connection(RPC_ENDPOINT, "confirmed"), []);
   return (
@@ -662,12 +434,9 @@ function Dashboard() {
       <BackgroundFX />
       <div className="container">
         <Header />
-
         <div className="subinfo">
-          <strong>Network:</strong> {CLUSTER} · <strong>Program:</strong>{" "}
-          {PROGRAM_ID_STR || "(fallback transfer mode)"}
+          <strong>Network:</strong> {CLUSTER} · <strong>Program:</strong> {PROGRAM_ID ? PROGRAM_ID.toBase58() : "(fallback transfer mode)"}
         </div>
-
         <div className="grid-main">
           <div className="col">
             <HealthCheck connection={connection} />
@@ -679,34 +448,23 @@ function Dashboard() {
             <FeePolicyCard />
           </div>
         </div>
-
-        <footer className="footer">
-          © {new Date().getFullYear()} VoltNet — Built on Solana ({CLUSTER})
-        </footer>
+        <footer className="footer">© {new Date().getFullYear()} VoltNet — Built on Solana ({CLUSTER})</footer>
       </div>
     </div>
   );
 }
+function Gate() { const { publicKey } = useWallet(); return publicKey ? <Dashboard /> : <Landing />; }
 
-function Gate() {
-  const { publicKey } = useWallet();
-  return publicKey ? <Dashboard /> : <Landing />;
-}
-
-/* -------------------------------------------------------
-   App
-------------------------------------------------------- */
 export default function App() {
   const wallets = useMemo(() => [new PhantomWalletAdapter(), new SolflareWalletAdapter()], []);
   return (
     <ConnectionProvider endpoint={RPC_ENDPOINT}>
       <WalletProvider wallets={wallets} autoConnect>
         <WalletModalProvider>
-          {/* Global theme styles (no Tailwind required) */}
+          {/* Thème Neon Arcade (CSS inline) */}
           <style>{`
             :root{--bg:#070816;--ink:#e2e8f0;--muted:#94a3b8;--card:rgba(255,255,255,.06);--glass:rgba(255,255,255,.08);--border:rgba(255,255,255,.16);--brand1:#7c3aed;--brand2:#06b6d4;--brand3:#22d3ee;--ok:#10b981;--bad:#ef4444}
-            *{box-sizing:border-box}
-            html,body,#root{height:100%}
+            *{box-sizing:border-box} html,body,#root{height:100%}
             body{margin:0;background:linear-gradient(180deg,#050616 0%,#0b1024 60%,#0b122b 100%);color:var(--ink);font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif}
             .screen{min-height:100vh;position:relative;overflow:hidden}
             .container{max-width:1120px;margin:0 auto;padding:24px}
@@ -715,58 +473,36 @@ export default function App() {
             .logo{width:44px;height:44px;display:grid;place-items:center;border-radius:14px;background:linear-gradient(135deg,var(--brand1),var(--brand2));box-shadow:0 8px 24px rgba(124,58,237,.35)}
             .brandtxt{font-weight:900;font-size:22px;background:linear-gradient(90deg,var(--brand1),var(--brand2),var(--brand3));background-size:200% 100%;-webkit-background-clip:text;background-clip:text;color:transparent;animation:sheen 7s linear infinite}
             .walletbtn{border-radius:12px !important}
-
             .subinfo{opacity:.85;margin:8px 0 24px 0;font-size:14px}
-            .grid-main{display:grid;grid-template-columns:1fr;gap:24px}
-            @media (min-width:860px){.grid-main{grid-template-columns:2fr 1fr}}
+            .grid-main{display:grid;grid-template-columns:1fr;gap:24px} @media (min-width:860px){.grid-main{grid-template-columns:2fr 1fr}}
             .col{display:grid;gap:24px}
-
             .card{position:relative;padding:22px;border:1px solid var(--border);border-radius:22px;background:linear-gradient(180deg,rgba(255,255,255,.08),rgba(255,255,255,.04));backdrop-filter:blur(8px);box-shadow:0 10px 30px rgba(2,6,23,.35);transition:transform .2s ease}
             .card-title{font-weight:800;font-size:20px;margin-bottom:6px}
             .jackpot{margin-top:6px;font-size:48px;font-weight:900;letter-spacing:-.02em;background:linear-gradient(90deg,var(--brand1),var(--brand2),var(--brand3));background-size:200% 100%;-webkit-background-clip:text;background-clip:text;color:transparent;animation:sheen 6s linear infinite;text-shadow:0 6px 24px rgba(34,211,238,.35)}
             .label{font-size:12px;letter-spacing:.2em;text-transform:uppercase;color:var(--muted)}
             .list{margin:10px 0 0 0;padding-left:18px}
-            .small{font-size:12px}
-            .muted{color:var(--muted)}
-            .success{color:#10b981}
-            .error{color:#ef4444}
-            .link{color:#60a5fa}
-
-            .grid-3{display:grid;grid-template-columns:1fr;gap:12px;margin-top:14px}
-            @media (min-width:860px){.grid-3{grid-template-columns:repeat(3,1fr)}}
-            .input{border:1px solid var(--border);border-radius:14px;padding:10px 12px;background:rgba(17,24,39,.35);color:var(--ink)}
-            .input.strong{font-weight:700}
-
+            .small{font-size:12px} .muted{color:var(--muted)} .success{color:#10b981} .error{color:#ef4444} .link{color:#60a5fa}
+            .grid-3{display:grid;grid-template-columns:1fr;gap:12px;margin-top:14px} @media (min-width:860px){.grid-3{grid-template-columns:repeat(3,1fr)}}
+            .input{border:1px solid var(--border);border-radius:14px;padding:10px 12px;background:rgba(17,24,39,.35);color:var(--ink)} .input.strong{font-weight:700}
             .btn{position:relative;overflow:hidden;border:none;border-radius:18px;padding:14px 18px;font-weight:700;color:#fff;background:linear-gradient(90deg,var(--brand1),var(--brand2),var(--brand3));box-shadow:0 20px 40px rgba(124,58,237,.35);cursor:pointer}
-            .btn:hover{filter:brightness(1.05)}
-            .btn:active{filter:brightness(.95)}
-            .btn.btn-disabled{opacity:.6;cursor:not-allowed}
+            .btn:hover{filter:brightness(1.05)} .btn:active{filter:brightness(.95)} .btn.btn-disabled{opacity:.6;cursor:not-allowed}
             .btn-secondary{background:#0f172a;color:#fff;border:1px solid var(--border)}
             .btn-shine{position:absolute;inset:0;transform:translateX(-100%);background:linear-gradient(120deg,transparent,rgba(255,255,255,.25),transparent);animation:shine 2.6s linear infinite}
-
             .chip{border-radius:18px;padding:14px 16px;border:1px solid var(--border);background:rgba(255,255,255,.06)}
             .chip-sub{margin-top:4px;font-size:12px;opacity:.9}
             .chip-good{background:rgba(16,185,129,.12);border-color:rgba(16,185,129,.35);color:#d1fae5}
             .chip-bad{background:rgba(239,68,68,.12);border-color:rgba(239,68,68,.35);color:#fee2e2}
             .chip-muted{opacity:.9}
-
             .countgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:12px}
             .countbox{border:1px solid var(--border);border-radius:16px;padding:10px 12px;background:rgba(255,255,255,.06);text-align:center}
-            .countnum{font-size:28px;font-weight:900}
-            .countlbl{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
-
+            .countnum{font-size:28px;font-weight:900} .countlbl{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
             .footer{padding:36px 0;text-align:center;color:var(--muted);font-size:13px}
-
             .hero{padding:60px 0 40px}
             .hero-title{font-size:56px;line-height:1.05;margin:0;font-weight:900;letter-spacing:-.02em;background:linear-gradient(90deg,#fff,#e9d5ff,#a5f3fc);-webkit-background-clip:text;background-clip:text;color:transparent;text-shadow:0 16px 40px rgba(99,102,241,.35)}
             .hero-sub{max-width:720px;margin-top:14px;opacity:.9}
             .features{display:flex;flex-wrap:wrap;gap:12px;margin-top:18px}
             .feature{border:1px dashed var(--border);border-radius:999px;padding:8px 12px;background:rgba(255,255,255,.05);backdrop-filter:blur(4px)}
-            .cta{margin-top:24px}
-            .cta-btn{border-radius:14px !important}
-            .note{margin-top:10px;color:var(--muted)}
-
-            /* background FX */
+            .cta{margin-top:24px} .cta-btn{border-radius:14px !important} .note{margin-top:10px;color:var(--muted)}
             .bgfx{position:absolute;inset:0;pointer-events:none}
             .stars{position:absolute;inset:0;background:radial-gradient(circle at 20% 20%,rgba(255,255,255,.06) 0 2px,transparent 2px),radial-gradient(circle at 80% 30%,rgba(255,255,255,.06) 0 2px,transparent 2px),radial-gradient(circle at 60% 70%,rgba(255,255,255,.06) 0 2px,transparent 2px);background-size:700px 700px,900px 900px,1100px 1100px;animation:stars 60s linear infinite}
             @keyframes stars{from{background-position:0 0,0 0,0 0}to{background-position:700px 700px,-900px 900px,1100px -1100px}}
@@ -776,10 +512,8 @@ export default function App() {
             .grid{position:absolute;inset:auto 0 0 0;height:320px;background-image:linear-gradient(rgba(255,255,255,.07) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.07) 1px,transparent 1px);background-size:40px 40px;transform:perspective(700px) rotateX(60deg);transform-origin:bottom center;box-shadow:0 -60px 120px rgba(79,70,229,.25) inset}
             .ball{position:absolute;width:62px;height:62px;border-radius:999px;background:#fff;color:#0f172a;display:grid;place-items:center;font-weight:900;box-shadow:0 16px 40px rgba(255,255,255,.2)}
             .coin{position:absolute;right:8%;top:16%;font-size:40px;color:#a5f3fc;text-shadow:0 8px 24px rgba(165,243,252,.4)}
-
             .solana{color:#a78bfa}
           `}</style>
-
           <Gate />
         </WalletModalProvider>
       </WalletProvider>

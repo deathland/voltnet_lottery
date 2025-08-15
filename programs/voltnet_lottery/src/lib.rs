@@ -16,7 +16,11 @@ pub mod voltnet_lottery {
         winner_bps: u16,
         rollover_bps: u16,
     ) -> Result<()> {
-        require!(winner_bps as u32 + rollover_bps as u32 == 10_000, VoltError::BadBps);
+        // somme des bps = 100%
+        require!(
+            winner_bps as u32 + rollover_bps as u32 == 10_000,
+            VoltError::BadBps
+        );
 
         let state = &mut ctx.accounts.state;
         state.admin = *ctx.accounts.admin.key;
@@ -38,7 +42,11 @@ pub mod voltnet_lottery {
         let state = &ctx.accounts.state;
         require!(state.draw_open, VoltError::DrawClosed);
 
-        let total = state.ticket_price_lamports.checked_mul(count).ok_or(VoltError::Overflow)?;
+        let total = state
+            .ticket_price_lamports
+            .checked_mul(count)
+            .ok_or(VoltError::Overflow)?;
+
         let fee = total * state.platform_fee_bps as u64 / 10_000;
         let to_vault = total.checked_sub(fee).ok_or(VoltError::Overflow)?;
 
@@ -46,7 +54,10 @@ pub mod voltnet_lottery {
         system_program::transfer(
             CpiContext::new(
                 ctx.accounts.system_program.to_account_info(),
-                Transfer { from: ctx.accounts.user.to_account_info(), to: ctx.accounts.treasury.to_account_info() }
+                Transfer {
+                    from: ctx.accounts.user.to_account_info(),
+                    to: ctx.accounts.treasury.to_account_info(),
+                },
             ),
             fee,
         )?;
@@ -55,7 +66,10 @@ pub mod voltnet_lottery {
         system_program::transfer(
             CpiContext::new(
                 ctx.accounts.system_program.to_account_info(),
-                Transfer { from: ctx.accounts.user.to_account_info(), to: ctx.accounts.vault.to_account_info() }
+                Transfer {
+                    from: ctx.accounts.user.to_account_info(),
+                    to: ctx.accounts.vault.to_account_info(),
+                },
             ),
             to_vault,
         )?;
@@ -64,17 +78,34 @@ pub mod voltnet_lottery {
         ut.user = *ctx.accounts.user.key;
         ut.epoch = state.epoch;
         ut.count = ut.count.saturating_add(count);
+
+        Ok(())
+    }
+
+    // 🔧 UNE SEULE implémentation de set_ticket_price
+    pub fn set_ticket_price(ctx: Context<SetTicketPrice>, new_price_lamports: u64) -> Result<()> {
+        // sécurité: seul l'admin du state peut modifier
+        require_keys_eq!(
+            ctx.accounts.admin.key(),
+            ctx.accounts.state.admin,
+            VoltError::Unauthorized
+        );
+        ctx.accounts.state.ticket_price_lamports = new_price_lamports;
         Ok(())
     }
 }
+
+/* ---------------- Accounts ---------------- */
 
 #[derive(Accounts)]
 pub struct Initialize<'info> {
     #[account(mut)]
     pub admin: Signer<'info>,
-    /// CHECK: treasury is a system account
+
+    /// CHECK: treasury est un compte système
     #[account(mut)]
     pub treasury: UncheckedAccount<'info>,
+
     #[account(
         init,
         seeds = [b"state"],
@@ -83,15 +114,17 @@ pub struct Initialize<'info> {
         space = 8 + LotteryState::SIZE
     )]
     pub state: Account<'info, LotteryState>,
+
+    /// CHECK: vault ne contient que des lamports (owner = system program)
     #[account(
         init,
         seeds = [b"vault", state.key().as_ref()],
         bump,
         payer = admin,
-        space = 8 // lamports-only PDA
+        space = 0
     )]
-    /// CHECK: vault holds only lamports
     pub vault: UncheckedAccount<'info>,
+
     pub system_program: Program<'info, System>,
 }
 
@@ -99,12 +132,18 @@ pub struct Initialize<'info> {
 pub struct BuyTickets<'info> {
     #[account(mut)]
     pub user: Signer<'info>,
+
+    /// CHECK: treasury est un compte système
     #[account(mut)]
     pub treasury: UncheckedAccount<'info>,
+
     #[account(mut, seeds = [b"state"], bump)]
     pub state: Account<'info, LotteryState>,
+
+    /// CHECK: vault lamports-only
     #[account(mut, seeds = [b"vault", state.key().as_ref()], bump)]
     pub vault: UncheckedAccount<'info>,
+
     #[account(
         init_if_needed,
         payer = user,
@@ -113,8 +152,20 @@ pub struct BuyTickets<'info> {
         space = 8 + UserTickets::SIZE
     )]
     pub user_tickets: Account<'info, UserTickets>,
+
     pub system_program: Program<'info, System>,
 }
+
+#[derive(Accounts)]
+pub struct SetTicketPrice<'info> {
+    #[account(mut)]
+    pub admin: Signer<'info>,
+
+    #[account(mut, seeds = [b"state"], bump)]
+    pub state: Account<'info, LotteryState>,
+}
+
+/* ---------------- Data ---------------- */
 
 #[account]
 pub struct LotteryState {
@@ -131,7 +182,8 @@ pub struct LotteryState {
     pub draw_open: bool,
 }
 impl LotteryState {
-    pub const SIZE: usize = 32 + 32 + 32 + 8 + 2 + 2 + 2 + 2 + 2 + 8 + 1;
+    pub const SIZE: usize =
+        32 + 32 + 32 + 8 + 2 + 2 + 2 + 2 + 2 + 8 + 1;
 }
 
 #[account]
@@ -144,10 +196,18 @@ impl UserTickets {
     pub const SIZE: usize = 32 + 8 + 8;
 }
 
+/* ---------------- Errors ---------------- */
+
 #[error_code]
 pub enum VoltError {
-    #[msg("invalid bps")] BadBps,
-    #[msg("overflow")] Overflow,
-    #[msg("bad amount")] BadAmount,
-    #[msg("draw closed")] DrawClosed,
+    #[msg("invalid bps")]
+    BadBps,
+    #[msg("overflow")]
+    Overflow,
+    #[msg("bad amount")]
+    BadAmount,
+    #[msg("draw closed")]
+    DrawClosed,
+    #[msg("Not authorized")]
+    Unauthorized,
 }

@@ -35,7 +35,7 @@ function findVaultPda(programId: PublicKey, statePda: PublicKey) {
   const vaultPda = findVaultPda(PROGRAM_ID, statePda);
 
   // Params
-  const ticketPriceLamports = Math.round(Number(process.env.TICKET_PRICE_SOL || "0.1") * LAMPORTS_PER_SOL);
+  const ticketPriceLamports = Math.round(Number(process.env.TICKET_PRICE_SOL || "0.01") * LAMPORTS_PER_SOL);
   const platformFeeBps      = Number(process.env.PLATFORM_FEE_BPS || "500");
   const rakeBps             = Number(process.env.RAKE_AT_PAYOUT_BPS || "500");
   const withdrawalFeeBps    = Number(process.env.WITHDRAWAL_FEE_BPS || "200");

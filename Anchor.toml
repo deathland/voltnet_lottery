@@ -1,0 +1,15 @@
+[features]
+seeds = true
+
+[programs.devnet]
+voltnet_lottery = "5JJV9foQ27twoVKKqcKhm1tKZhQQXgLCLykrde37rzaK"
+
+[registry]
+url = "https://api.apr.dev"
+
+[provider]
+cluster = "devnet"
+wallet = "~/.config/solana/id.json"
+
+[scripts]
+init = "npx ts-node -P tsconfig.json scripts/init.ts"

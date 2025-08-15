@@ -1,0 +1,15 @@
+[package]
+name = "voltnet-lottery"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "voltnet_lottery"
+
+[features]
+no-entrypoint = []
+idl-build = []
+
+[dependencies]
+anchor-lang = { version = "0.31.1", features = ["init-if-needed"] }

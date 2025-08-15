@@ -9,12 +9,15 @@ import {
   PublicKey,
   SystemProgram,
   Transaction,
-  TransactionInstruction,
 } from "@solana/web3.js";
 import * as anchor from "@coral-xyz/anchor";
 import { motion, AnimatePresence } from "framer-motion";
 import confetti from "canvas-confetti";
 import "@solana/wallet-adapter-react-ui/styles.css";
+
+/** =========================================================
+ *  VoltNet Lottery dApp — responsive UI + Anchor 2-arg ctor
+ *  ========================================================= */
 
 // ---------- Polyfills Buffer/global (Vite) ----------
 import { Buffer } from "buffer";
@@ -29,8 +32,7 @@ if (typeof globalThis !== "undefined") {
 
 // ---------- Config ----------
 type SupportedCluster = "devnet" | "mainnet-beta";
-const CLUSTER: SupportedCluster =
-  (import.meta.env.VITE_SOLANA_CLUSTER as SupportedCluster) || "devnet";
+const CLUSTER: SupportedCluster = (import.meta.env.VITE_SOLANA_CLUSTER as SupportedCluster) || "devnet";
 
 const DEFAULT_ENDPOINT = clusterApiUrl(CLUSTER);
 const RPC_ENDPOINT: string =
@@ -39,7 +41,7 @@ const RPC_ENDPOINT: string =
 const PROGRAM_ID_STR = (import.meta.env.VITE_PROGRAM_ID as string) || "";
 const PROGRAM_ID = PROGRAM_ID_STR ? new PublicKey(PROGRAM_ID_STR) : null;
 
-const ESCROW_WALLET = new PublicKey("4ZubhYsJvTLeVtggbtf5qw8oHmXBG4xDrzkZuracGSaa"); // fallback (sans programme)
+const ESCROW_WALLET = new PublicKey("4ZubhYsJvTLeVtggbtf5qw8oHmXBG4xDrzkZuracGSaa");
 const TREASURY_PUBKEY = new PublicKey(
   (import.meta.env.VITE_TREASURY_PUBKEY as string) || "4ZubhYsJvTLeVtggbtf5qw8oHmXBG4xDrzkZuracGSaa"
 );
@@ -59,8 +61,12 @@ const FEES = {
 function formatSol(lamports: number) {
   return (lamports / LAMPORTS_PER_SOL).toLocaleString(undefined, { maximumFractionDigits: 4 });
 }
-function toLamports(sol: number) { return Math.round(sol * LAMPORTS_PER_SOL); }
-function endOfCurrentMonth(): Date { const now = new Date(); return new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59); }
+function toLamports(sol: number) {
+  return Math.round(sol * LAMPORTS_PER_SOL);
+}
+function endOfCurrentMonth(): Date {
+  const now = new Date(); return new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
+}
 function useCountdown(target: Date) {
   const [, setTick] = useState(0);
   useEffect(() => { const t = setInterval(() => setTick(v => v + 1), 1000); return () => clearInterval(t); }, []);
@@ -79,24 +85,18 @@ function computeTicketSplit(count: number, unitPriceSol: number, platformFeeBps:
 }
 function u64ToLeBuffer(n: anchor.BN): Buffer { const b = Buffer.alloc(8); b.writeBigUInt64LE(BigInt(n.toString())); return b; }
 function findStatePda(programId: PublicKey) { return PublicKey.findProgramAddressSync([Buffer.from("state")], programId)[0]; }
-function findVaultPda(programId: PublicKey, statePda: PublicKey) { return PublicKey.findProgramAddressSync([Buffer.from("vault"), statePda.toBuffer()], programId)[0]; }
+function findVaultPda(programId: PublicKey, statePda: PublicKey) {
+  return PublicKey.findProgramAddressSync([Buffer.from("vault"), statePda.toBuffer()], programId)[0];
+}
 function findUserTicketsPda(programId: PublicKey, user: PublicKey, epoch: anchor.BN) {
   return PublicKey.findProgramAddressSync([Buffer.from("user_tickets"), user.toBuffer(), u64ToLeBuffer(epoch)], programId)[0];
 }
 
-// u64 en LE (pour fallback “raw ix”)
-function u64LeFromNumber(n: number) { const b = Buffer.alloc(8); b.writeBigUInt64LE(BigInt(n)); return b; }
-// Discriminator d’instruction Anchor (web crypto)
-async function ixDiscriminator(name: string): Promise<Buffer> {
-  const bytes = new TextEncoder().encode(`global:${name}`);
-  const hash = await crypto.subtle.digest("SHA-256", bytes);
-  return Buffer.from(new Uint8Array(hash)).subarray(0, 8);
-}
-
-// ---------- IDL minimal (any) ----------
+// ---------- IDL minimal (typed as any + address for 2-arg Program ctor) ----------
 const VOLTNET_IDL: any = {
   version: "0.1.0",
   name: "voltnet_lottery",
+  metadata: { address: PROGRAM_ID_STR }, // ⚠️ indispensable pour Program(idl, provider)
   instructions: [
     {
       name: "buyTickets",
@@ -162,7 +162,11 @@ function useAnimatedNumber(value: number, duration = 800) {
   }, [value, duration]);
   return display;
 }
-function TiltCard({ children, className = "", style = {} }: { children: React.ReactNode; className?: string; style?: React.CSSProperties }) {
+
+// Tilt card (désactivé automatiquement sur écrans tactiles)
+function TiltCard({
+  children, className = "", style = {},
+}: { children: React.ReactNode; className?: string; style?: React.CSSProperties }) {
   const ref = useRef<HTMLDivElement>(null);
   const [transform, setTransform] = useState("perspective(900px) rotateX(0) rotateY(0)");
   const isTouch = typeof window !== "undefined" && matchMedia("(hover: none)").matches;
@@ -244,7 +248,6 @@ function PotCard({ connection }: { connection: Connection }) {
     </TiltCard>
   );
 }
-
 function FeePolicyCard() {
   const buybackInfo =
     FEES.BUYBACK_BPS_OF_TREASURY > 0
@@ -268,23 +271,13 @@ function FeePolicyCard() {
 function BuyTickets({ connection }: { connection: Connection }) {
   const wallet = useWallet();
   const { publicKey, sendTransaction } = wallet;
-
   const [count, setCount] = useState(1);
   const [loading, setLoading] = useState(false);
   const [txSig, setTxSig] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [balance, setBalance] = useState<number | null>(null);
+  const [airdropSig, setAirdropSig] = useState<string | null>(null);
 
-  const needLamports = useMemo(() => toLamports(count * TICKET_PRICE_SOL), [count]);
   const totalSol = useMemo(() => (count <= 0 ? 0 : count * TICKET_PRICE_SOL), [count]);
-
-  // Balance utilisateur (pour airdrop / message)
-  const refreshBalance = useCallback(async () => {
-    if (!publicKey) return setBalance(null);
-    try { const lamports = await connection.getBalance(publicKey, "confirmed"); setBalance(lamports); } catch {}
-  }, [connection, publicKey]);
-  useEffect(() => { refreshBalance(); }, [refreshBalance]);
-
   const preview = useMemo(() => {
     const { totalLamports, feeLamports, jackpotLamports } = computeTicketSplit(
       count, TICKET_PRICE_SOL, FEES.PLATFORM_FEE_BPS
@@ -292,104 +285,61 @@ function BuyTickets({ connection }: { connection: Connection }) {
     return { totalLamports, feeLamports, jackpotLamports };
   }, [count]);
 
-  // Fallback : envoie l’ix "buy_tickets" manuellement si Anchor bug (_bn)
-  const sendRawBuy = useCallback(async () => {
-    if (!PROGRAM_ID || !publicKey) throw new Error("Program or wallet missing");
-
-    const provider = new anchor.AnchorProvider(connection as any, {} as any, { commitment: "confirmed" });
-    const program  = new anchor.Program(VOLTNET_IDL as any, PROGRAM_ID, provider);
-
-    const statePda = findStatePda(PROGRAM_ID);
-    const vaultPda = findVaultPda(PROGRAM_ID, statePda);
-    const state: any = await program.account.lotteryState.fetch(statePda);
-    const epoch = new anchor.BN(state.epoch.toString());
-    const userTicketsPda = findUserTicketsPda(PROGRAM_ID, publicKey, epoch);
-
-    const disc = await ixDiscriminator("buy_tickets"); // nom exact côté Rust
-    const data = Buffer.concat([disc, u64LeFromNumber(count)]);
-
-    const ix = new TransactionInstruction({
-      programId: PROGRAM_ID,
-      keys: [
-        { pubkey: publicKey,            isSigner: true,  isWritable: true  },
-        { pubkey: TREASURY_PUBKEY,      isSigner: false, isWritable: true  },
-        { pubkey: statePda,             isSigner: false, isWritable: true  },
-        { pubkey: vaultPda,             isSigner: false, isWritable: true  },
-        { pubkey: userTicketsPda,       isSigner: false, isWritable: true  },
-        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-      ],
-      data,
-    });
-
-    const tx = new Transaction().add(ix);
-    tx.feePayer = publicKey;
-    const sig = await sendTransaction(tx, connection);
-    return sig;
-  }, [connection, publicKey, count]);
-
-  const airdrop = useCallback(async () => {
+  const onAirdrop = useCallback(async () => {
+    if (!publicKey || CLUSTER !== "devnet") return;
     try {
-      if (CLUSTER !== "devnet") throw new Error("Airdrop only on devnet");
-      if (!publicKey) throw new Error("Connect wallet first");
-      setError(null); setLoading(true);
-      const sig = await connection.requestAirdrop(publicKey, 0.5 * LAMPORTS_PER_SOL);
+      setError(null); setAirdropSig(null);
+      const sig = await connection.requestAirdrop(publicKey, 1 * LAMPORTS_PER_SOL);
       const bh = await connection.getLatestBlockhash();
       await connection.confirmTransaction({ signature: sig, ...bh }, "confirmed");
-      await refreshBalance();
-    } catch (e: any) { setError(e?.message || "Airdrop failed"); }
-    finally { setLoading(false); }
-  }, [connection, publicKey, refreshBalance]);
+      setAirdropSig(sig);
+    } catch (e: any) {
+      setError(e?.message || "Airdrop failed");
+    }
+  }, [publicKey, connection]);
 
   const onBuy = useCallback(async () => {
     setError(null); setTxSig(null);
-    if (!publicKey) { setError("Connecte d’abord ton wallet."); return; }
+    if (!publicKey) { setError("Connecte ton wallet d’abord."); return; }
     if (count <= 0) { setError("Quantité invalide."); return; }
-    if (balance !== null && balance < needLamports + 5_000) {
-      setError("SOL insuffisant. Utilise l’airdrop (devnet) ou diminue la quantité.");
-      return;
-    }
 
     try {
       setLoading(true);
       if (PROGRAM_ID) {
-        try {
-          // ------- Flow Anchor -------
-          const provider = new anchor.AnchorProvider(
-            connection as any,
-            {
-              publicKey,
-              signTransaction: wallet.signTransaction!,
-              signAllTransactions: wallet.signAllTransactions!,
-            } as unknown as anchor.Wallet,
-            { commitment: "confirmed" }
-          );
-          const program = new anchor.Program(VOLTNET_IDL as any, PROGRAM_ID, provider);
+        // ------- Anchor flow (2-arg Program ctor) -------
+        const provider = new anchor.AnchorProvider(
+          connection as any,
+          {
+            publicKey,
+            signTransaction: wallet.signTransaction!,
+            signAllTransactions: wallet.signAllTransactions!,
+          } as unknown as anchor.Wallet,
+          { commitment: "confirmed" }
+        );
 
-          const statePda = findStatePda(PROGRAM_ID);
-          const vaultPda = findVaultPda(PROGRAM_ID, statePda);
-          const state = (await program.account.lotteryState.fetch(statePda)) as any;
-          const epoch: anchor.BN = new anchor.BN(state.epoch.toString());
-          const userTicketsPda = findUserTicketsPda(PROGRAM_ID, publicKey, epoch);
+        // ✅ IDL (any) + metadata.address => 2-arg ctor
+        const program = new (anchor as any).Program(VOLTNET_IDL as any, provider as any);
 
-          const sig = await program.methods
-            .buyTickets(new anchor.BN(count))
-            .accounts({
-              user: publicKey,
-              treasury: TREASURY_PUBKEY,
-              state: statePda,
-              vault: vaultPda,
-              userTickets: userTicketsPda,
-              systemProgram: SystemProgram.programId,
-            })
-            .rpc();
-          setTxSig(sig);
-        } catch (e: any) {
-          // _bn / translateAddress → fallback “raw”
-          if (/_bn|translateAddress/i.test(String(e?.message || e))) {
-            const sig = await sendRawBuy();
-            setTxSig(sig);
-          } else { throw e; }
-        }
+        const statePda = findStatePda(PROGRAM_ID);
+        const vaultPda = findVaultPda(PROGRAM_ID, statePda);
+
+        const state = await ((program as any).account as any)["lotteryState"].fetch(statePda);
+        const epoch: anchor.BN = new anchor.BN(state.epoch.toString());
+        const userTicketsPda = findUserTicketsPda(PROGRAM_ID, publicKey, epoch);
+
+        const sig = await (program as any).methods
+          .buyTickets(new anchor.BN(count))
+          .accounts({
+            user: publicKey,
+            treasury: TREASURY_PUBKEY,
+            state: statePda,
+            vault: vaultPda,
+            userTickets: userTicketsPda,
+            systemProgram: SystemProgram.programId,
+          })
+          .rpc();
+
+        setTxSig(sig);
       } else {
         // ------- Fallback transfert simple -------
         const lamports = toLamports(totalSol);
@@ -400,31 +350,16 @@ function BuyTickets({ connection }: { connection: Connection }) {
         const sig = await sendTransaction(tx, connection);
         setTxSig(sig);
       }
-
       confetti({ particleCount: 140, spread: 70, origin: { y: 0.7 } });
-      await refreshBalance();
-    } catch (e: any) {
-      const msg = String(e?.message || e);
-      if (/insufficient/i.test(msg)) setError("SOL insuffisant. Fais un airdrop (devnet) ou alimente ton wallet.");
-      else setError(msg);
-    } finally { setLoading(false); }
-  }, [publicKey, count, totalSol, connection, wallet, balance, needLamports, sendRawBuy, refreshBalance]);
+    } catch (e: any) { setError(e?.message ?? "Échec de la transaction"); }
+    finally { setLoading(false); }
+  }, [publicKey, count, totalSol, connection, wallet]);
 
   const explorerParam = clusterQueryParam(CLUSTER);
 
   return (
     <TiltCard>
       <div className="card-title">Buy tickets</div>
-
-      {CLUSTER === "devnet" && publicKey && (
-        <div className="small muted" style={{ marginBottom: 8 }}>
-          Balance: {balance === null ? "—" : `${formatSol(balance)} SOL`} ·{" "}
-          <button className="link" onClick={airdrop} disabled={loading} style={{ border: "none", background: "none", cursor: "pointer" }}>
-            Airdrop 0.5 SOL (devnet)
-          </button>
-        </div>
-      )}
-
       <div className="grid-3">
         <div>
           <div className="label">Count</div>
@@ -446,6 +381,12 @@ function BuyTickets({ connection }: { connection: Connection }) {
         {loading ? "Envoi…" : PROGRAM_ID ? "Buy (Program)" : "Buy"}
       </MagneticButton>
 
+      {CLUSTER === "devnet" && (
+        <button onClick={onAirdrop} className="btn btn-secondary" style={{ marginTop: 12 }}>
+          +1 SOL (Devnet airdrop)
+        </button>
+      )}
+
       <AnimatePresence>
         {txSig && (
           <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 6 }} className="success mt-12">
@@ -456,8 +397,16 @@ function BuyTickets({ connection }: { connection: Connection }) {
           </motion.div>
         )}
       </AnimatePresence>
+      {airdropSig && (
+        <div className="success mt-8">
+          💧 Airdrop:{" "}
+          <a className="link" href={`https://explorer.solana.com/tx/${airdropSig}${clusterQueryParam(CLUSTER)}`} target="_blank" rel="noreferrer">
+            confirmé
+          </a>
+        </div>
+      )}
       {error && <div className="error mt-12">❌ {error}</div>}
-      <div className="small muted mt-12">En achetant tu acceptes les règles. Aucune garantie de gains. Les frais sont affichés ci-dessus.</div>
+      <div className="small muted mt-12">En achetant vous acceptez les règles. Aucune garantie de gains. Les frais sont affichés ci-dessus.</div>
     </TiltCard>
   );
 }
@@ -477,7 +426,6 @@ function Countdown() {
     </TiltCard>
   );
 }
-
 function Header() {
   return (
     <header className="header">
@@ -487,17 +435,10 @@ function Header() {
   );
 }
 function BackgroundFX() {
-  const balls = useMemo(() => [7, 13, 23, 42].map((n, i) => ({ n, d: 6 + i * 1.3 })), []);
   return (
     <div className="bgfx" aria-hidden>
       <div className="stars" /><div className="aurora aurora-1" /><div className="aurora aurora-2" /><div className="grid" />
-      {balls.map((b, idx) => (
-        <motion.div key={idx} className="ball" style={{ left: `${10 + idx * 20}%`, top: `${20 + (idx % 2) * 25}%` }}
-          animate={{ y: [0, -22, 0] }} transition={{ repeat: Infinity, duration: b.d, ease: "easeInOut" }}>
-          {b.n}
-        </motion.div>
-      ))}
-      <motion.div className="coin" initial={{ rotate: 0 }} animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: 18, ease: "linear" }}>◎</motion.div>
+      <div className="beams beams-1" /><div className="beams beams-2" />
     </div>
   );
 }
@@ -563,16 +504,13 @@ export default function App() {
     <ConnectionProvider endpoint={RPC_ENDPOINT}>
       <WalletProvider wallets={wallets} autoConnect>
         <WalletModalProvider>
-          {/* Thème Neon Arcade (CSS inline) */}
+          {/* Thème + responsive (full-screen) */}
           <style>{`
   :root{--bg:#070816;--ink:#e2e8f0;--muted:#94a3b8;--card:rgba(255,255,255,.06);--glass:rgba(255,255,255,.08);--border:rgba(255,255,255,.16);--brand1:#7c3aed;--brand2:#06b6d4;--brand3:#22d3ee;--ok:#10b981;--bad:#ef4444}
   *{box-sizing:border-box} html,body,#root{height:100%}
   body{margin:0;background:linear-gradient(180deg,#050616 0%,#0b1024 60%,#0b122b 100%);color:var(--ink);font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif}
-  .screen{min-height:100vh;position:relative;overflow:hidden}
-
-  /* padding fluide pour s’adapter au mobile */
-  .container{max-width:1120px;margin:0 auto;padding:clamp(14px,3.5vw,24px)}
-
+  .screen{min-height:100svh;position:relative;overflow:hidden;display:flex;flex-direction:column}
+  .container{max-width:1120px;margin:0 auto;padding:clamp(14px,3.5vw,24px);display:flex;flex-direction:column;flex:1}
   .header{display:flex;align-items:center;justify-content:space-between;padding:12px 0}
   .brand{display:flex;align-items:center;gap:12px}
   .logo{width:44px;height:44px;display:grid;place-items:center;border-radius:14px;background:linear-gradient(135deg,var(--brand1),var(--brand2));box-shadow:0 8px 24px rgba(124,58,237,.35)}
@@ -580,13 +518,11 @@ export default function App() {
   .walletbtn{border-radius:12px !important}
 
   .subinfo{opacity:.85;margin:8px 0 24px 0;font-size:14px}
-
-  .grid-main{display:grid;grid-template-columns:1fr;gap:24px}
+  .grid-main{display:grid;grid-template-columns:1fr;gap:24px;flex:1}
   @media (min-width:860px){.grid-main{grid-template-columns:2fr 1fr}}
   .col{display:grid;gap:24px}
 
   .card{position:relative;padding:clamp(14px,3.2vw,22px);border:1px solid var(--border);border-radius:22px;background:linear-gradient(180deg,rgba(255,255,255,.08),rgba(255,255,255,.04));backdrop-filter:blur(8px);box-shadow:0 10px 30px rgba(2,6,23,.35);transition:transform .2s ease}
-  /* annule le tilt sur tactile */
   @media (hover:none){ .card{transform:none !important} }
 
   .card-title{font-weight:800;font-size:20px;margin-bottom:6px}
@@ -597,7 +533,8 @@ export default function App() {
 
   .grid-3{display:grid;grid-template-columns:1fr;gap:12px;margin-top:14px}
   @media (min-width:860px){.grid-3{grid-template-columns:repeat(3,1fr)}}
-  .input{width:100%;border:1px solid var(--border);border-radius:14px;padding:10px 12px;background:rgba(17,24,39,.35);color:var(--ink)} .input.strong{font-weight:700}
+  .input{width:100%;border:1px solid var(--border);border-radius:14px;padding:10px 12px;background:rgba(17,24,39,.35);color:var(--ink)}
+  .input.strong{font-weight:700}
 
   .btn{position:relative;overflow:hidden;border:none;border-radius:18px;padding:14px 18px;font-weight:700;color:#fff;background:linear-gradient(90deg,var(--brand1),var(--brand2),var(--brand3));box-shadow:0 20px 40px rgba(124,58,237,.35);cursor:pointer}
   .btn:hover{filter:brightness(1.05)} .btn:active{filter:brightness(.95)} .btn.btn-disabled{opacity:.6;cursor:not-allowed}
@@ -617,12 +554,13 @@ export default function App() {
 
   .footer{padding:36px 0;text-align:center;color:var(--muted);font-size:13px}
 
-  .hero{padding:60px 0 40px}
+  .hero{flex:1;display:flex;flex-direction:column;justify-content:center;padding:60px 0 40px}
   .hero-title{font-size:clamp(28px,6.6vw,56px);line-height:1.05;margin:0;font-weight:900;letter-spacing:-.02em;background:linear-gradient(90deg,#fff,#e9d5ff,#a5f3fc);-webkit-background-clip:text;background-clip:text;color:transparent;text-shadow:0 16px 40px rgba(99,102,241,.35)}
   .hero-sub{max-width:720px;margin-top:14px;opacity:.9}
   .features{display:flex;flex-wrap:wrap;gap:12px;margin-top:18px}
   .feature{border:1px dashed var(--border);border-radius:999px;padding:8px 12px;background:rgba(255,255,255,.05);backdrop-filter:blur(4px)}
-  .cta{margin-top:24px} .cta-btn{border-radius:14px !important} .note{margin-top:10px;color:var(--muted)}
+  .cta{margin-top:24px} .cta-btn{border-radius:14px !important}
+  .note{margin-top:10px;color:var(--muted)}
 
   /* background FX */
   .bgfx{position:absolute;inset:0;pointer-events:none}
@@ -632,8 +570,10 @@ export default function App() {
   .aurora-1{width:900px;height:900px;left:50%;transform:translateX(-50%);top:-360px;background:radial-gradient(circle at 70% 30%,rgba(124,58,237,.5),transparent),radial-gradient(circle at 30% 70%,rgba(34,211,238,.5),transparent)}
   .aurora-2{width:700px;height:700px;left:-180px;bottom:-260px;background:radial-gradient(circle at 20% 20%,rgba(14,165,233,.5),transparent),radial-gradient(circle at 80% 80%,rgba(59,130,246,.5),transparent)}
   .grid{position:absolute;inset:auto 0 0 0;height:320px;background-image:linear-gradient(rgba(255,255,255,.07) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.07) 1px,transparent 1px);background-size:40px 40px;transform:perspective(700px) rotateX(60deg);transform-origin:bottom center;box-shadow:0 -60px 120px rgba(79,70,229,.25) inset}
-  .ball{position:absolute;width:62px;height:62px;border-radius:999px;background:#fff;color:#0f172a;display:grid;place-items:center;font-weight:900;box-shadow:0 16px 40px rgba(255,255,255,.2)}
-  .coin{position:absolute;right:8%;top:16%;font-size:40px;color:#a5f3fc;text-shadow:0 8px 24px rgba(165,243,252,.4)}
+  .beams{position:absolute;inset:-20%;background:conic-gradient(from 0deg,transparent 0 20%,rgba(124,58,237,.12) 20% 30%,transparent 30% 50%,rgba(34,211,238,.12) 50% 60%,transparent 60% 100%);filter:blur(42px);mix-blend-mode:screen;animation:spin 80s linear infinite}
+  .beams-1{animation-duration:70s;opacity:.8}
+  .beams-2{animation-duration:110s;opacity:.6}
+  @keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
 
   /* micro-ajustements mobile */
   @media (max-width:520px){
@@ -641,13 +581,11 @@ export default function App() {
     .walletbtn{width:100% !important;justify-content:center}
     .brandtxt{font-size:18px}
     .logo{width:36px;height:36px}
-    .ball{width:44px;height:44px}
-    .coin{display:none}
-    .grid{height:240px}
+    .grid{height:220px}
   }
+
   .solana{color:#a78bfa}
 `}</style>
-
           <Gate />
         </WalletModalProvider>
       </WalletProvider>

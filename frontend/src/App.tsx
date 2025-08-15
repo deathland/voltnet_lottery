@@ -157,12 +157,42 @@ function useAnimatedNumber(value: number, duration = 800) {
   }, [value, duration]);
   return display;
 }
-function TiltCard({ children, className = "", style = {} }: { children: React.ReactNode; className?: string; style?: React.CSSProperties }) {
-  const ref = useRef<HTMLDivElement>(null); const [transform, setTransform] = useState("perspective(900px) rotateX(0) rotateY(0)");
-  const onMove = (e: React.MouseEvent) => { const el = ref.current; if (!el) return; const r = el.getBoundingClientRect(); const px = (e.clientX - r.left) / r.width; const py = (e.clientY - r.top) / r.height; const rotY = (px - .5) * 10; const rotX = (.5 - py) * 10; setTransform(`perspective(900px) rotateX(${rotX}deg) rotateY(${rotY}deg)`); };
+function TiltCard({
+  children,
+  className = "",
+  style = {},
+}: { children: React.ReactNode; className?: string; style?: React.CSSProperties }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [transform, setTransform] = useState("perspective(900px) rotateX(0) rotateY(0)");
+
+  // Désactive l’animation sur écrans tactiles
+  const isTouch = typeof window !== "undefined" && window.matchMedia?.("(pointer: coarse)").matches;
+
+  const onMove = (e: React.MouseEvent) => {
+    if (isTouch) return;
+    const el = ref.current; if (!el) return;
+    const r = el.getBoundingClientRect();
+    const px = (e.clientX - r.left) / r.width;
+    const py = (e.clientY - r.top) / r.height;
+    const rotY = (px - 0.5) * 10;
+    const rotX = (0.5 - py) * 10;
+    setTransform(`perspective(900px) rotateX(${rotX}deg) rotateY(${rotY}deg)`);
+  };
   const onLeave = () => setTransform("perspective(900px) rotateX(0) rotateY(0)");
-  return <div ref={ref} onMouseMove={onMove} onMouseLeave={onLeave} className={"card " + className} style={{ ...style, transform }}>{children}</div>;
+
+  return (
+    <div
+      ref={ref}
+      onMouseMove={onMove}
+      onMouseLeave={onLeave}
+      className={"card " + className}
+      style={{ ...style, transform }}
+    >
+      {children}
+    </div>
+  );
 }
+
 function MagneticButton({ children, onClick, disabled, className = "" }: { children: React.ReactNode; onClick?: () => void; disabled?: boolean; className?: string }) {
   const ref = useRef<HTMLButtonElement>(null); const [t, setT] = useState({ x: 0, y: 0 });
   const onMove = (e: React.MouseEvent) => { const el = ref.current; if (!el) return; const r = el.getBoundingClientRect(); const x = ((e.clientX - r.left) / r.width - .5) * 16; const y = ((e.clientY - r.top) / r.height - .5) * 16; setT({ x, y }); };
@@ -464,55 +494,101 @@ export default function App() {
           {/* Thème Neon Arcade (CSS inline) */}
           <style>{`
             :root{--bg:#070816;--ink:#e2e8f0;--muted:#94a3b8;--card:rgba(255,255,255,.06);--glass:rgba(255,255,255,.08);--border:rgba(255,255,255,.16);--brand1:#7c3aed;--brand2:#06b6d4;--brand3:#22d3ee;--ok:#10b981;--bad:#ef4444}
-            *{box-sizing:border-box} html,body,#root{height:100%}
-            body{margin:0;background:linear-gradient(180deg,#050616 0%,#0b1024 60%,#0b122b 100%);color:var(--ink);font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif}
-            .screen{min-height:100vh;position:relative;overflow:hidden}
-            .container{max-width:1120px;margin:0 auto;padding:24px}
-            .header{display:flex;align-items:center;justify-content:space-between;padding:12px 0}
-            .brand{display:flex;align-items:center;gap:12px}
-            .logo{width:44px;height:44px;display:grid;place-items:center;border-radius:14px;background:linear-gradient(135deg,var(--brand1),var(--brand2));box-shadow:0 8px 24px rgba(124,58,237,.35)}
-            .brandtxt{font-weight:900;font-size:22px;background:linear-gradient(90deg,var(--brand1),var(--brand2),var(--brand3));background-size:200% 100%;-webkit-background-clip:text;background-clip:text;color:transparent;animation:sheen 7s linear infinite}
-            .walletbtn{border-radius:12px !important}
-            .subinfo{opacity:.85;margin:8px 0 24px 0;font-size:14px}
-            .grid-main{display:grid;grid-template-columns:1fr;gap:24px} @media (min-width:860px){.grid-main{grid-template-columns:2fr 1fr}}
-            .col{display:grid;gap:24px}
-            .card{position:relative;padding:22px;border:1px solid var(--border);border-radius:22px;background:linear-gradient(180deg,rgba(255,255,255,.08),rgba(255,255,255,.04));backdrop-filter:blur(8px);box-shadow:0 10px 30px rgba(2,6,23,.35);transition:transform .2s ease}
-            .card-title{font-weight:800;font-size:20px;margin-bottom:6px}
-            .jackpot{margin-top:6px;font-size:48px;font-weight:900;letter-spacing:-.02em;background:linear-gradient(90deg,var(--brand1),var(--brand2),var(--brand3));background-size:200% 100%;-webkit-background-clip:text;background-clip:text;color:transparent;animation:sheen 6s linear infinite;text-shadow:0 6px 24px rgba(34,211,238,.35)}
-            .label{font-size:12px;letter-spacing:.2em;text-transform:uppercase;color:var(--muted)}
-            .list{margin:10px 0 0 0;padding-left:18px}
-            .small{font-size:12px} .muted{color:var(--muted)} .success{color:#10b981} .error{color:#ef4444} .link{color:#60a5fa}
-            .grid-3{display:grid;grid-template-columns:1fr;gap:12px;margin-top:14px} @media (min-width:860px){.grid-3{grid-template-columns:repeat(3,1fr)}}
-            .input{border:1px solid var(--border);border-radius:14px;padding:10px 12px;background:rgba(17,24,39,.35);color:var(--ink)} .input.strong{font-weight:700}
-            .btn{position:relative;overflow:hidden;border:none;border-radius:18px;padding:14px 18px;font-weight:700;color:#fff;background:linear-gradient(90deg,var(--brand1),var(--brand2),var(--brand3));box-shadow:0 20px 40px rgba(124,58,237,.35);cursor:pointer}
-            .btn:hover{filter:brightness(1.05)} .btn:active{filter:brightness(.95)} .btn.btn-disabled{opacity:.6;cursor:not-allowed}
-            .btn-secondary{background:#0f172a;color:#fff;border:1px solid var(--border)}
-            .btn-shine{position:absolute;inset:0;transform:translateX(-100%);background:linear-gradient(120deg,transparent,rgba(255,255,255,.25),transparent);animation:shine 2.6s linear infinite}
-            .chip{border-radius:18px;padding:14px 16px;border:1px solid var(--border);background:rgba(255,255,255,.06)}
-            .chip-sub{margin-top:4px;font-size:12px;opacity:.9}
-            .chip-good{background:rgba(16,185,129,.12);border-color:rgba(16,185,129,.35);color:#d1fae5}
-            .chip-bad{background:rgba(239,68,68,.12);border-color:rgba(239,68,68,.35);color:#fee2e2}
-            .chip-muted{opacity:.9}
-            .countgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:12px}
-            .countbox{border:1px solid var(--border);border-radius:16px;padding:10px 12px;background:rgba(255,255,255,.06);text-align:center}
-            .countnum{font-size:28px;font-weight:900} .countlbl{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
-            .footer{padding:36px 0;text-align:center;color:var(--muted);font-size:13px}
-            .hero{padding:60px 0 40px}
-            .hero-title{font-size:56px;line-height:1.05;margin:0;font-weight:900;letter-spacing:-.02em;background:linear-gradient(90deg,#fff,#e9d5ff,#a5f3fc);-webkit-background-clip:text;background-clip:text;color:transparent;text-shadow:0 16px 40px rgba(99,102,241,.35)}
-            .hero-sub{max-width:720px;margin-top:14px;opacity:.9}
-            .features{display:flex;flex-wrap:wrap;gap:12px;margin-top:18px}
-            .feature{border:1px dashed var(--border);border-radius:999px;padding:8px 12px;background:rgba(255,255,255,.05);backdrop-filter:blur(4px)}
-            .cta{margin-top:24px} .cta-btn{border-radius:14px !important} .note{margin-top:10px;color:var(--muted)}
-            .bgfx{position:absolute;inset:0;pointer-events:none}
-            .stars{position:absolute;inset:0;background:radial-gradient(circle at 20% 20%,rgba(255,255,255,.06) 0 2px,transparent 2px),radial-gradient(circle at 80% 30%,rgba(255,255,255,.06) 0 2px,transparent 2px),radial-gradient(circle at 60% 70%,rgba(255,255,255,.06) 0 2px,transparent 2px);background-size:700px 700px,900px 900px,1100px 1100px;animation:stars 60s linear infinite}
-            @keyframes stars{from{background-position:0 0,0 0,0 0}to{background-position:700px 700px,-900px 900px,1100px -1100px}}
-            .aurora{position:absolute;filter:blur(64px);border-radius:999px;opacity:.6}
-            .aurora-1{width:900px;height:900px;left:50%;transform:translateX(-50%);top:-360px;background:radial-gradient(circle at 70% 30%,rgba(124,58,237,.5),transparent),radial-gradient(circle at 30% 70%,rgba(34,211,238,.5),transparent)}
-            .aurora-2{width:700px;height:700px;left:-180px;bottom:-260px;background:radial-gradient(circle at 20% 20%,rgba(14,165,233,.5),transparent),radial-gradient(circle at 80% 80%,rgba(59,130,246,.5),transparent)}
-            .grid{position:absolute;inset:auto 0 0 0;height:320px;background-image:linear-gradient(rgba(255,255,255,.07) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.07) 1px,transparent 1px);background-size:40px 40px;transform:perspective(700px) rotateX(60deg);transform-origin:bottom center;box-shadow:0 -60px 120px rgba(79,70,229,.25) inset}
-            .ball{position:absolute;width:62px;height:62px;border-radius:999px;background:#fff;color:#0f172a;display:grid;place-items:center;font-weight:900;box-shadow:0 16px 40px rgba(255,255,255,.2)}
-            .coin{position:absolute;right:8%;top:16%;font-size:40px;color:#a5f3fc;text-shadow:0 8px 24px rgba(165,243,252,.4)}
-            .solana{color:#a78bfa}
+*{box-sizing:border-box}
+html,body,#root{height:100%}
+body{margin:0;background:linear-gradient(180deg,#050616 0%,#0b1024 60%,#0b122b 100%);color:var(--ink);font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif}
+
+.screen{min-height:100vh;position:relative;overflow:hidden}
+.container{max-width:1120px;margin:0 auto;padding:24px}
+.header{display:flex;align-items:center;justify-content:space-between;padding:12px 0}
+.brand{display:flex;align-items:center;gap:12px}
+.logo{width:44px;height:44px;display:grid;place-items:center;border-radius:14px;background:linear-gradient(135deg,var(--brand1),var(--brand2));box-shadow:0 8px 24px rgba(124,58,237,.35)}
+.brandtxt{font-weight:900;font-size:22px;background:linear-gradient(90deg,var(--brand1),var(--brand2),var(--brand3));background-size:200% 100%;-webkit-background-clip:text;background-clip:text;color:transparent;animation:sheen 7s linear infinite}
+.walletbtn{border-radius:12px !important}
+
+.subinfo{opacity:.85;margin:8px 0 24px 0;font-size:14px}
+.grid-main{display:grid;grid-template-columns:1fr;gap:24px}
+@media (min-width:860px){.grid-main{grid-template-columns:2fr 1fr}}
+.col{display:grid;gap:24px}
+
+.card{position:relative;padding:22px;border:1px solid var(--border);border-radius:22px;background:linear-gradient(180deg,rgba(255,255,255,.08),rgba(255,255,255,.04));backdrop-filter:blur(8px);box-shadow:0 10px 30px rgba(2,6,23,.35);transition:transform .2s ease}
+.card-title{font-weight:800;font-size:20px;margin-bottom:6px}
+.jackpot{margin-top:6px;font-size:48px;font-weight:900;letter-spacing:-.02em;background:linear-gradient(90deg,var(--brand1),var(--brand2),var(--brand3));background-size:200% 100%;-webkit-background-clip:text;background-clip:text;color:transparent;animation:sheen 6s linear infinite;text-shadow:0 6px 24px rgba(34,211,238,.35)}
+.label{font-size:12px;letter-spacing:.2em;text-transform:uppercase;color:var(--muted)}
+.list{margin:10px 0 0 0;padding-left:18px}
+.small{font-size:12px}.muted{color:var(--muted)}.success{color:#10b981}.error{color:#ef4444}.link{color:#60a5fa}
+
+.grid-3{display:grid;grid-template-columns:1fr;gap:12px;margin-top:14px}
+@media (min-width:860px){.grid-3{grid-template-columns:repeat(3,1fr)}}
+.input{width:100%;border:1px solid var(--border);border-radius:14px;padding:10px 12px;background:rgba(17,24,39,.35);color:var(--ink)}
+.input.strong{font-weight:700}
+
+.btn{position:relative;overflow:hidden;border:none;border-radius:18px;padding:14px 18px;font-weight:700;color:#fff;background:linear-gradient(90deg,var(--brand1),var(--brand2),var(--brand3));box-shadow:0 20px 40px rgba(124,58,237,.35);cursor:pointer}
+.btn:hover{filter:brightness(1.05)} .btn:active{filter:brightness(.95)}
+.btn.btn-disabled{opacity:.6;cursor:not-allowed}
+.btn-secondary{background:#0f172a;color:#fff;border:1px solid var(--border)}
+.btn-shine{position:absolute;inset:0;transform:translateX(-100%);background:linear-gradient(120deg,transparent,rgba(255,255,255,.25),transparent);animation:shine 2.6s linear infinite}
+
+.chip{border-radius:18px;padding:14px 16px;border:1px solid var(--border);background:rgba(255,255,255,.06)}
+.chip-sub{margin-top:4px;font-size:12px;opacity:.9}
+.chip-good{background:rgba(16,185,129,.12);border-color:rgba(16,185,129,.35);color:#d1fae5}
+.chip-bad{background:rgba(239,68,68,.12);border-color:rgba(239,68,68,.35);color:#fee2e2}
+.chip-muted{opacity:.9}
+
+.countgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:12px}
+.countbox{border:1px solid var(--border);border-radius:16px;padding:10px 12px;background:rgba(255,255,255,.06);text-align:center}
+.countnum{font-size:28px;font-weight:900}
+.countlbl{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+
+.footer{padding:36px 0;text-align:center;color:var(--muted);font-size:13px}
+
+.hero{padding:60px 0 40px}
+.hero-title{font-size:56px;line-height:1.05;margin:0;font-weight:900;letter-spacing:-.02em;background:linear-gradient(90deg,#fff,#e9d5ff,#a5f3fc);-webkit-background-clip:text;background-clip:text;color:transparent;text-shadow:0 16px 40px rgba(99,102,241,.35)}
+.hero-sub{max-width:720px;margin-top:14px;opacity:.9}
+.features{display:flex;flex-wrap:wrap;gap:12px;margin-top:18px}
+.feature{border:1px dashed var(--border);border-radius:999px;padding:8px 12px;background:rgba(255,255,255,.05);backdrop-filter:blur(4px)}
+.cta{margin-top:24px}
+.cta-btn{border-radius:14px !important}
+.note{margin-top:10px;color:var(--muted)}
+
+/* background FX */
+.bgfx{position:absolute;inset:0;pointer-events:none}
+.stars{position:absolute;inset:0;background:radial-gradient(circle at 20% 20%,rgba(255,255,255,.06) 0 2px,transparent 2px),radial-gradient(circle at 80% 30%,rgba(255,255,255,.06) 0 2px,transparent 2px),radial-gradient(circle at 60% 70%,rgba(255,255,255,.06) 0 2px,transparent 2px);background-size:700px 700px,900px 900px,1100px 1100px;animation:stars 60s linear infinite}
+@keyframes stars{from{background-position:0 0,0 0,0 0}to{background-position:700px 700px,-900px 900px,1100px -1100px}}
+.aurora{position:absolute;filter:blur(64px);border-radius:999px;opacity:.6}
+.aurora-1{width:900px;height:900px;left:50%;transform:translateX(-50%);top:-360px;background:radial-gradient(circle at 70% 30%,rgba(124,58,237,.5),transparent),radial-gradient(circle at 30% 70%,rgba(34,211,238,.5),transparent)}
+.aurora-2{width:700px;height:700px;left:-180px;bottom:-260px;background:radial-gradient(circle at 20% 20%,rgba(14,165,233,.5),transparent),radial-gradient(circle at 80% 80%,rgba(59,130,246,.5),transparent)}
+.grid{position:absolute;inset:auto 0 0 0;height:320px;background-image:linear-gradient(rgba(255,255,255,.07) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.07) 1px,transparent 1px);background-size:40px 40px;transform:perspective(700px) rotateX(60deg);transform-origin:bottom center;box-shadow:0 -60px 120px rgba(79,70,229,.25) inset}
+.ball{position:absolute;width:62px;height:62px;border-radius:999px;background:#fff;color:#0f172a;display:grid;place-items:center;font-weight:900;box-shadow:0 16px 40px rgba(255,255,255,.2)}
+.coin{position:absolute;right:8%;top:16%;font-size:40px;color:#a5f3fc;text-shadow:0 8px 24px rgba(165,243,252,.4)}
+
+.solana{color:#a78bfa}
+
+/* ---------------- RESPONSIVE (mobile first) ---------------- */
+@media (max-width:860px){
+  .container{padding:18px}
+  .header{padding:6px 0}
+  .brandtxt{font-size:18px}
+  .hero{padding:36px 0 22px}
+  .hero-title{font-size:clamp(28px,7vw,40px)}
+  .hero-sub{font-size:14px}
+  .card{padding:16px;border-radius:18px}
+  .jackpot{font-size:clamp(28px,9vw,40px)}
+  .countgrid{grid-template-columns:repeat(2,1fr)}
+  .btn,.walletbtn,.cta .wallet-adapter-button{width:100%}
+  .grid{height:220px}
+  .ball{width:42px;height:42px}
+  .coin{display:none}
+}
+
+/* Safe areas iOS */
+@supports(padding:max(0px)){
+  .container{
+    padding-left:max(18px,env(safe-area-inset-left));
+    padding-right:max(18px,env(safe-area-inset-right));
+  }
+}
+
           `}</style>
           <Gate />
         </WalletModalProvider>

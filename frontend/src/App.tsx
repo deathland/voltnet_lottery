@@ -584,7 +584,42 @@ export default function App() {
     .coin{display:none}
     .grid{height:240px}
   }
+  /* ====== Mobile / petits écrans ====== */
+@media (max-width: 860px){
+  .container{padding:18px}
+  .header{padding-top:4px}
+  .logo{width:36px;height:36px;border-radius:12px}
+  .brandtxt{font-size:18px}
 
+  .hero{padding:28px 0 18px}
+  .hero-title{font-size:36px; line-height:1.08}
+  .hero-sub{font-size:15px}
+
+  .grid-main{grid-template-columns:1fr}
+  .card{padding:16px;border-radius:18px}
+  .jackpot{font-size:36px}
+  .countgrid{grid-template-columns:repeat(4,1fr)}
+  .input{padding:10px 12px}
+
+  .btn{border-radius:14px;padding:12px 16px}
+  .btn-secondary{padding:10px 14px}
+
+  .ball{width:40px;height:40px}
+  .coin{display:none}          /* évite le gros symbole qui gêne */
+  .grid{height:180px}
+}
+
+@media (max-width: 380px){
+  .hero-title{font-size:28px}
+  .features{gap:8px}
+  .feature{font-size:13px;padding:6px 10px}
+}
+
+/* Sur appareils tactiles : pas d’effet tilt agressif */
+@media (pointer:coarse){
+  .card{transform:none !important}
+}
+         
   .solana{color:#a78bfa}
 `}</style>
 

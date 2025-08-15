@@ -9,6 +9,7 @@ import {
   PublicKey,
   SystemProgram,
   Transaction,
+  TransactionInstruction,
 } from "@solana/web3.js";
 import * as anchor from "@coral-xyz/anchor";
 import { motion, AnimatePresence } from "framer-motion";
@@ -59,9 +60,7 @@ function formatSol(lamports: number) {
   return (lamports / LAMPORTS_PER_SOL).toLocaleString(undefined, { maximumFractionDigits: 4 });
 }
 function toLamports(sol: number) { return Math.round(sol * LAMPORTS_PER_SOL); }
-function endOfCurrentMonth(): Date {
-  const now = new Date(); return new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
-}
+function endOfCurrentMonth(): Date { const now = new Date(); return new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59); }
 function useCountdown(target: Date) {
   const [, setTick] = useState(0);
   useEffect(() => { const t = setInterval(() => setTick(v => v + 1), 1000); return () => clearInterval(t); }, []);
@@ -80,18 +79,24 @@ function computeTicketSplit(count: number, unitPriceSol: number, platformFeeBps:
 }
 function u64ToLeBuffer(n: anchor.BN): Buffer { const b = Buffer.alloc(8); b.writeBigUInt64LE(BigInt(n.toString())); return b; }
 function findStatePda(programId: PublicKey) { return PublicKey.findProgramAddressSync([Buffer.from("state")], programId)[0]; }
-function findVaultPda(programId: PublicKey, statePda: PublicKey) {
-  return PublicKey.findProgramAddressSync([Buffer.from("vault"), statePda.toBuffer()], programId)[0];
-}
+function findVaultPda(programId: PublicKey, statePda: PublicKey) { return PublicKey.findProgramAddressSync([Buffer.from("vault"), statePda.toBuffer()], programId)[0]; }
 function findUserTicketsPda(programId: PublicKey, user: PublicKey, epoch: anchor.BN) {
   return PublicKey.findProgramAddressSync([Buffer.from("user_tickets"), user.toBuffer(), u64ToLeBuffer(epoch)], programId)[0];
 }
 
-// ---------- IDL minimal (typé any + adresse) ----------
+// u64 en LE (pour fallback “raw ix”)
+function u64LeFromNumber(n: number) { const b = Buffer.alloc(8); b.writeBigUInt64LE(BigInt(n)); return b; }
+// Discriminator d’instruction Anchor (web crypto)
+async function ixDiscriminator(name: string): Promise<Buffer> {
+  const bytes = new TextEncoder().encode(`global:${name}`);
+  const hash = await crypto.subtle.digest("SHA-256", bytes);
+  return Buffer.from(new Uint8Array(hash)).subarray(0, 8);
+}
+
+// ---------- IDL minimal (any) ----------
 const VOLTNET_IDL: any = {
   version: "0.1.0",
   name: "voltnet_lottery",
-  metadata: { address: PROGRAM_ID_STR }, // ✅ permet le constructeur Program(idl, provider)
   instructions: [
     {
       name: "buyTickets",
@@ -157,16 +162,9 @@ function useAnimatedNumber(value: number, duration = 800) {
   }, [value, duration]);
   return display;
 }
-function TiltCard({
-  children,
-  className = "",
-  style = {},
-}: { children: React.ReactNode; className?: string; style?: React.CSSProperties }) {
+function TiltCard({ children, className = "", style = {} }: { children: React.ReactNode; className?: string; style?: React.CSSProperties }) {
   const ref = useRef<HTMLDivElement>(null);
   const [transform, setTransform] = useState("perspective(900px) rotateX(0) rotateY(0)");
-
-  // Désactive l’animation sur écrans tactiles
-  
   const isTouch = typeof window !== "undefined" && matchMedia("(hover: none)").matches;
   const onMove = (e: React.MouseEvent) => {
     if (isTouch) return;
@@ -179,20 +177,8 @@ function TiltCard({
     setTransform(`perspective(900px) rotateX(${rotX}deg) rotateY(${rotY}deg)`);
   };
   const onLeave = () => setTransform("perspective(900px) rotateX(0) rotateY(0)");
-
-  return (
-    <div
-      ref={ref}
-      onMouseMove={onMove}
-      onMouseLeave={onLeave}
-      className={"card " + className}
-      style={{ ...style, transform }}
-    >
-      {children}
-    </div>
-  );
+  return <div ref={ref} onMouseMove={onMove} onMouseLeave={onLeave} className={"card " + className} style={{ ...style, transform }}>{children}</div>;
 }
-
 function MagneticButton({ children, onClick, disabled, className = "" }: { children: React.ReactNode; onClick?: () => void; disabled?: boolean; className?: string }) {
   const ref = useRef<HTMLButtonElement>(null); const [t, setT] = useState({ x: 0, y: 0 });
   const onMove = (e: React.MouseEvent) => { const el = ref.current; if (!el) return; const r = el.getBoundingClientRect(); const x = ((e.clientX - r.left) / r.width - .5) * 16; const y = ((e.clientY - r.top) / r.height - .5) * 16; setT({ x, y }); };
@@ -258,6 +244,7 @@ function PotCard({ connection }: { connection: Connection }) {
     </TiltCard>
   );
 }
+
 function FeePolicyCard() {
   const buybackInfo =
     FEES.BUYBACK_BPS_OF_TREASURY > 0
@@ -281,12 +268,23 @@ function FeePolicyCard() {
 function BuyTickets({ connection }: { connection: Connection }) {
   const wallet = useWallet();
   const { publicKey, sendTransaction } = wallet;
+
   const [count, setCount] = useState(1);
   const [loading, setLoading] = useState(false);
   const [txSig, setTxSig] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [balance, setBalance] = useState<number | null>(null);
 
+  const needLamports = useMemo(() => toLamports(count * TICKET_PRICE_SOL), [count]);
   const totalSol = useMemo(() => (count <= 0 ? 0 : count * TICKET_PRICE_SOL), [count]);
+
+  // Balance utilisateur (pour airdrop / message)
+  const refreshBalance = useCallback(async () => {
+    if (!publicKey) return setBalance(null);
+    try { const lamports = await connection.getBalance(publicKey, "confirmed"); setBalance(lamports); } catch {}
+  }, [connection, publicKey]);
+  useEffect(() => { refreshBalance(); }, [refreshBalance]);
+
   const preview = useMemo(() => {
     const { totalLamports, feeLamports, jackpotLamports } = computeTicketSplit(
       count, TICKET_PRICE_SOL, FEES.PLATFORM_FEE_BPS
@@ -294,46 +292,104 @@ function BuyTickets({ connection }: { connection: Connection }) {
     return { totalLamports, feeLamports, jackpotLamports };
   }, [count]);
 
+  // Fallback : envoie l’ix "buy_tickets" manuellement si Anchor bug (_bn)
+  const sendRawBuy = useCallback(async () => {
+    if (!PROGRAM_ID || !publicKey) throw new Error("Program or wallet missing");
+
+    const provider = new anchor.AnchorProvider(connection as any, {} as any, { commitment: "confirmed" });
+    const program  = new anchor.Program(VOLTNET_IDL as any, PROGRAM_ID, provider);
+
+    const statePda = findStatePda(PROGRAM_ID);
+    const vaultPda = findVaultPda(PROGRAM_ID, statePda);
+    const state: any = await program.account.lotteryState.fetch(statePda);
+    const epoch = new anchor.BN(state.epoch.toString());
+    const userTicketsPda = findUserTicketsPda(PROGRAM_ID, publicKey, epoch);
+
+    const disc = await ixDiscriminator("buy_tickets"); // nom exact côté Rust
+    const data = Buffer.concat([disc, u64LeFromNumber(count)]);
+
+    const ix = new TransactionInstruction({
+      programId: PROGRAM_ID,
+      keys: [
+        { pubkey: publicKey,            isSigner: true,  isWritable: true  },
+        { pubkey: TREASURY_PUBKEY,      isSigner: false, isWritable: true  },
+        { pubkey: statePda,             isSigner: false, isWritable: true  },
+        { pubkey: vaultPda,             isSigner: false, isWritable: true  },
+        { pubkey: userTicketsPda,       isSigner: false, isWritable: true  },
+        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+      ],
+      data,
+    });
+
+    const tx = new Transaction().add(ix);
+    tx.feePayer = publicKey;
+    const sig = await sendTransaction(tx, connection);
+    return sig;
+  }, [connection, publicKey, count]);
+
+  const airdrop = useCallback(async () => {
+    try {
+      if (CLUSTER !== "devnet") throw new Error("Airdrop only on devnet");
+      if (!publicKey) throw new Error("Connect wallet first");
+      setError(null); setLoading(true);
+      const sig = await connection.requestAirdrop(publicKey, 0.5 * LAMPORTS_PER_SOL);
+      const bh = await connection.getLatestBlockhash();
+      await connection.confirmTransaction({ signature: sig, ...bh }, "confirmed");
+      await refreshBalance();
+    } catch (e: any) { setError(e?.message || "Airdrop failed"); }
+    finally { setLoading(false); }
+  }, [connection, publicKey, refreshBalance]);
+
   const onBuy = useCallback(async () => {
     setError(null); setTxSig(null);
-    if (!publicKey) { setError("Connecte ton wallet d’abord."); return; }
+    if (!publicKey) { setError("Connecte d’abord ton wallet."); return; }
     if (count <= 0) { setError("Quantité invalide."); return; }
+    if (balance !== null && balance < needLamports + 5_000) {
+      setError("SOL insuffisant. Utilise l’airdrop (devnet) ou diminue la quantité.");
+      return;
+    }
 
     try {
       setLoading(true);
       if (PROGRAM_ID) {
-        // ------- Flow Anchor (constructor à 2 args) -------
-        const provider = new anchor.AnchorProvider(
-          connection as any,
-          {
-            publicKey,
-            signTransaction: wallet.signTransaction!,
-            signAllTransactions: wallet.signAllTransactions!,
-          } as unknown as anchor.Wallet,
-          { commitment: "confirmed" }
-        );
-        const program = new (anchor as any).Program(VOLTNET_IDL as any, provider as any); // ✅
+        try {
+          // ------- Flow Anchor -------
+          const provider = new anchor.AnchorProvider(
+            connection as any,
+            {
+              publicKey,
+              signTransaction: wallet.signTransaction!,
+              signAllTransactions: wallet.signAllTransactions!,
+            } as unknown as anchor.Wallet,
+            { commitment: "confirmed" }
+          );
+          const program = new anchor.Program(VOLTNET_IDL as any, PROGRAM_ID, provider);
 
-        const statePda = findStatePda(PROGRAM_ID);
-        const vaultPda = findVaultPda(PROGRAM_ID, statePda);
+          const statePda = findStatePda(PROGRAM_ID);
+          const vaultPda = findVaultPda(PROGRAM_ID, statePda);
+          const state = (await program.account.lotteryState.fetch(statePda)) as any;
+          const epoch: anchor.BN = new anchor.BN(state.epoch.toString());
+          const userTicketsPda = findUserTicketsPda(PROGRAM_ID, publicKey, epoch);
 
-        const state = await ((program as any).account as any)["lotteryState"].fetch(statePda);
-        const epoch: anchor.BN = new anchor.BN(state.epoch.toString());
-        const userTicketsPda = findUserTicketsPda(PROGRAM_ID, publicKey, epoch);
-
-        const sig = await (program as any).methods
-          .buyTickets(new anchor.BN(count))
-          .accounts({
-            user: publicKey,
-            treasury: TREASURY_PUBKEY,
-            state: statePda,
-            vault: vaultPda,
-            userTickets: userTicketsPda,
-            systemProgram: SystemProgram.programId,
-          })
-          .rpc();
-
-        setTxSig(sig);
+          const sig = await program.methods
+            .buyTickets(new anchor.BN(count))
+            .accounts({
+              user: publicKey,
+              treasury: TREASURY_PUBKEY,
+              state: statePda,
+              vault: vaultPda,
+              userTickets: userTicketsPda,
+              systemProgram: SystemProgram.programId,
+            })
+            .rpc();
+          setTxSig(sig);
+        } catch (e: any) {
+          // _bn / translateAddress → fallback “raw”
+          if (/_bn|translateAddress/i.test(String(e?.message || e))) {
+            const sig = await sendRawBuy();
+            setTxSig(sig);
+          } else { throw e; }
+        }
       } else {
         // ------- Fallback transfert simple -------
         const lamports = toLamports(totalSol);
@@ -344,16 +400,31 @@ function BuyTickets({ connection }: { connection: Connection }) {
         const sig = await sendTransaction(tx, connection);
         setTxSig(sig);
       }
+
       confetti({ particleCount: 140, spread: 70, origin: { y: 0.7 } });
-    } catch (e: any) { setError(e?.message ?? "Échec de la transaction"); }
-    finally { setLoading(false); }
-  }, [publicKey, count, totalSol, connection, wallet]);
+      await refreshBalance();
+    } catch (e: any) {
+      const msg = String(e?.message || e);
+      if (/insufficient/i.test(msg)) setError("SOL insuffisant. Fais un airdrop (devnet) ou alimente ton wallet.");
+      else setError(msg);
+    } finally { setLoading(false); }
+  }, [publicKey, count, totalSol, connection, wallet, balance, needLamports, sendRawBuy, refreshBalance]);
 
   const explorerParam = clusterQueryParam(CLUSTER);
 
   return (
     <TiltCard>
       <div className="card-title">Buy tickets</div>
+
+      {CLUSTER === "devnet" && publicKey && (
+        <div className="small muted" style={{ marginBottom: 8 }}>
+          Balance: {balance === null ? "—" : `${formatSol(balance)} SOL`} ·{" "}
+          <button className="link" onClick={airdrop} disabled={loading} style={{ border: "none", background: "none", cursor: "pointer" }}>
+            Airdrop 0.5 SOL (devnet)
+          </button>
+        </div>
+      )}
+
       <div className="grid-3">
         <div>
           <div className="label">Count</div>
@@ -386,7 +457,7 @@ function BuyTickets({ connection }: { connection: Connection }) {
         )}
       </AnimatePresence>
       {error && <div className="error mt-12">❌ {error}</div>}
-      <div className="small muted mt-12">En achetant vous acceptez les règles. Aucune garantie de gains. Les frais sont affichés ci-dessus.</div>
+      <div className="small muted mt-12">En achetant tu acceptes les règles. Aucune garantie de gains. Les frais sont affichés ci-dessus.</div>
     </TiltCard>
   );
 }
@@ -406,6 +477,7 @@ function Countdown() {
     </TiltCard>
   );
 }
+
 function Header() {
   return (
     <header className="header">
@@ -494,8 +566,7 @@ export default function App() {
           {/* Thème Neon Arcade (CSS inline) */}
           <style>{`
   :root{--bg:#070816;--ink:#e2e8f0;--muted:#94a3b8;--card:rgba(255,255,255,.06);--glass:rgba(255,255,255,.08);--border:rgba(255,255,255,.16);--brand1:#7c3aed;--brand2:#06b6d4;--brand3:#22d3ee;--ok:#10b981;--bad:#ef4444}
-  *{box-sizing:border-box}
-  html,body,#root{height:100%}
+  *{box-sizing:border-box} html,body,#root{height:100%}
   body{margin:0;background:linear-gradient(180deg,#050616 0%,#0b1024 60%,#0b122b 100%);color:var(--ink);font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif}
   .screen{min-height:100vh;position:relative;overflow:hidden}
 
@@ -515,28 +586,21 @@ export default function App() {
   .col{display:grid;gap:24px}
 
   .card{position:relative;padding:clamp(14px,3.2vw,22px);border:1px solid var(--border);border-radius:22px;background:linear-gradient(180deg,rgba(255,255,255,.08),rgba(255,255,255,.04));backdrop-filter:blur(8px);box-shadow:0 10px 30px rgba(2,6,23,.35);transition:transform .2s ease}
-  /* annule le tilt sur tactile, pour éviter les mouvements parasites */
+  /* annule le tilt sur tactile */
   @media (hover:none){ .card{transform:none !important} }
 
   .card-title{font-weight:800;font-size:20px;margin-bottom:6px}
   .jackpot{margin-top:6px;font-size:clamp(32px,10vw,48px);font-weight:900;letter-spacing:-.02em;background:linear-gradient(90deg,var(--brand1),var(--brand2),var(--brand3));background-size:200% 100%;-webkit-background-clip:text;background-clip:text;color:transparent;animation:sheen 6s linear infinite;text-shadow:0 6px 24px rgba(34,211,238,.35)}
   .label{font-size:12px;letter-spacing:.2em;text-transform:uppercase;color:var(--muted)}
   .list{margin:10px 0 0 0;padding-left:18px}
-  .small{font-size:12px}
-  .muted{color:var(--muted)}
-  .success{color:#10b981}
-  .error{color:#ef4444}
-  .link{color:#60a5fa}
+  .small{font-size:12px} .muted{color:var(--muted)} .success{color:#10b981} .error{color:#ef4444} .link{color:#60a5fa}
 
   .grid-3{display:grid;grid-template-columns:1fr;gap:12px;margin-top:14px}
   @media (min-width:860px){.grid-3{grid-template-columns:repeat(3,1fr)}}
-  .input{width:100%;border:1px solid var(--border);border-radius:14px;padding:10px 12px;background:rgba(17,24,39,.35);color:var(--ink)}
-  .input.strong{font-weight:700}
+  .input{width:100%;border:1px solid var(--border);border-radius:14px;padding:10px 12px;background:rgba(17,24,39,.35);color:var(--ink)} .input.strong{font-weight:700}
 
   .btn{position:relative;overflow:hidden;border:none;border-radius:18px;padding:14px 18px;font-weight:700;color:#fff;background:linear-gradient(90deg,var(--brand1),var(--brand2),var(--brand3));box-shadow:0 20px 40px rgba(124,58,237,.35);cursor:pointer}
-  .btn:hover{filter:brightness(1.05)}
-  .btn:active{filter:brightness(.95)}
-  .btn.btn-disabled{opacity:.6;cursor:not-allowed}
+  .btn:hover{filter:brightness(1.05)} .btn:active{filter:brightness(.95)} .btn.btn-disabled{opacity:.6;cursor:not-allowed}
   .btn-secondary{background:#0f172a;color:#fff;border:1px solid var(--border)}
   .btn-shine{position:absolute;inset:0;transform:translateX(-100%);background:linear-gradient(120deg,transparent,rgba(255,255,255,.25),transparent);animation:shine 2.6s linear infinite}
 
@@ -549,8 +613,7 @@ export default function App() {
   .countgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:12px}
   @media (max-width:480px){.countgrid{grid-template-columns:repeat(2,1fr)}}
   .countbox{border:1px solid var(--border);border-radius:16px;padding:10px 12px;background:rgba(255,255,255,.06);text-align:center}
-  .countnum{font-size:28px;font-weight:900}
-  .countlbl{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+  .countnum{font-size:28px;font-weight:900} .countlbl{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
 
   .footer{padding:36px 0;text-align:center;color:var(--muted);font-size:13px}
 
@@ -559,9 +622,7 @@ export default function App() {
   .hero-sub{max-width:720px;margin-top:14px;opacity:.9}
   .features{display:flex;flex-wrap:wrap;gap:12px;margin-top:18px}
   .feature{border:1px dashed var(--border);border-radius:999px;padding:8px 12px;background:rgba(255,255,255,.05);backdrop-filter:blur(4px)}
-  .cta{margin-top:24px}
-  .cta-btn{border-radius:14px !important}
-  .note{margin-top:10px;color:var(--muted)}
+  .cta{margin-top:24px} .cta-btn{border-radius:14px !important} .note{margin-top:10px;color:var(--muted)}
 
   /* background FX */
   .bgfx{position:absolute;inset:0;pointer-events:none}
@@ -584,42 +645,6 @@ export default function App() {
     .coin{display:none}
     .grid{height:240px}
   }
-  /* ====== Mobile / petits écrans ====== */
-@media (max-width: 860px){
-  .container{padding:18px}
-  .header{padding-top:4px}
-  .logo{width:36px;height:36px;border-radius:12px}
-  .brandtxt{font-size:18px}
-
-  .hero{padding:28px 0 18px}
-  .hero-title{font-size:36px; line-height:1.08}
-  .hero-sub{font-size:15px}
-
-  .grid-main{grid-template-columns:1fr}
-  .card{padding:16px;border-radius:18px}
-  .jackpot{font-size:36px}
-  .countgrid{grid-template-columns:repeat(4,1fr)}
-  .input{padding:10px 12px}
-
-  .btn{border-radius:14px;padding:12px 16px}
-  .btn-secondary{padding:10px 14px}
-
-  .ball{width:40px;height:40px}
-  .coin{display:none}          /* évite le gros symbole qui gêne */
-  .grid{height:180px}
-}
-
-@media (max-width: 380px){
-  .hero-title{font-size:28px}
-  .features{gap:8px}
-  .feature{font-size:13px;padding:6px 10px}
-}
-
-/* Sur appareils tactiles : pas d’effet tilt agressif */
-@media (pointer:coarse){
-  .card{transform:none !important}
-}
-         
   .solana{color:#a78bfa}
 `}</style>
 

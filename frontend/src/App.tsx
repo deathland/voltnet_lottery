@@ -9,7 +9,6 @@ import {
   PublicKey,
   SystemProgram,
   Transaction,
-  
 } from "@solana/web3.js";
 import * as anchor from "@coral-xyz/anchor";
 import { motion, AnimatePresence } from "framer-motion";
@@ -39,7 +38,7 @@ const RPC_ENDPOINT: string =
 const PROGRAM_ID_STR = (import.meta.env.VITE_PROGRAM_ID as string) || "";
 const PROGRAM_ID = PROGRAM_ID_STR ? new PublicKey(PROGRAM_ID_STR) : null;
 
-const ESCROW_WALLET = new PublicKey("4ZubhYsJvTLeVtggbtf5qw8oHmXBG4xDrzkZuracGSaa"); // fallback (sans programme)
+const ESCROW_WALLET = new PublicKey("4ZubhYsJvTLeVtggbtf5qw8oHmXBG4xDrzkZuracGSaa");
 const TREASURY_PUBKEY = new PublicKey(
   (import.meta.env.VITE_TREASURY_PUBKEY as string) || "4ZubhYsJvTLeVtggbtf5qw8oHmXBG4xDrzkZuracGSaa"
 );
@@ -88,35 +87,31 @@ function findUserTicketsPda(programId: PublicKey, user: PublicKey, epoch: anchor
   return PublicKey.findProgramAddressSync([Buffer.from("user_tickets"), user.toBuffer(), u64ToLeBuffer(epoch)], programId)[0];
 }
 
-// ----- FIX: WebCrypto discriminator (ArrayBuffer) + fallback Node -----
-
-
-// ---------- IDL minimal (typé any + adresse) ----------
+// ---------- IDL minimal (typé any) ----------
 const VOLTNET_IDL: any = {
   version: "0.1.0",
   name: "voltnet_lottery",
-  metadata: { address: PROGRAM_ID_STR }, // permet le ctor Program(idl, provider)
   instructions: [
     {
       name: "buyTickets",
       accounts: [
-        { name: "user", isMut: true, isSigner: true },
-        { name: "treasury", isMut: true, isSigner: false },
-        { name: "state", isMut: true, isSigner: false },
-        { name: "vault", isMut: true, isSigner: false },
-        { name: "userTickets", isMut: true, isSigner: false },
-        { name: "systemProgram", isMut: false, isSigner: false },
+        { name: "user" },
+        { name: "treasury" },
+        { name: "state" },
+        { name: "vault" },
+        { name: "userTickets" },
+        { name: "systemProgram" },
       ],
       args: [{ name: "count", type: "u64" }],
     },
     {
       name: "initialize",
       accounts: [
-        { name: "admin", isMut: true, isSigner: true },
-        { name: "treasury", isMut: true, isSigner: false },
-        { name: "state", isMut: true, isSigner: false },
-        { name: "vault", isMut: true, isSigner: false },
-        { name: "systemProgram", isMut: false, isSigner: false },
+        { name: "admin" },
+        { name: "treasury" },
+        { name: "state" },
+        { name: "vault" },
+        { name: "systemProgram" },
       ],
       args: [
         { name: "ticketPriceLamports", type: "u64" },
@@ -161,11 +156,7 @@ function useAnimatedNumber(value: number, duration = 800) {
   }, [value, duration]);
   return display;
 }
-function TiltCard({
-  children,
-  className = "",
-  style = {},
-}: { children: React.ReactNode; className?: string; style?: React.CSSProperties }) {
+function TiltCard({ children, className = "", style = {} }: { children: React.ReactNode; className?: string; style?: React.CSSProperties }) {
   const ref = useRef<HTMLDivElement>(null);
   const [transform, setTransform] = useState("perspective(900px) rotateX(0) rotateY(0)");
   const isTouch = typeof window !== "undefined" && matchMedia("(hover: none)").matches;
@@ -175,16 +166,12 @@ function TiltCard({
     const r = el.getBoundingClientRect();
     const px = (e.clientX - r.left) / r.width;
     const py = (e.clientY - r.top) / r.height;
-    const rotY = (px - 0.5) * 10;
-    const rotX = (0.5 - py) * 10;
+    const rotY = (px - .5) * 10;
+    const rotX = (.5 - py) * 10;
     setTransform(`perspective(900px) rotateX(${rotX}deg) rotateY(${rotY}deg)`);
   };
   const onLeave = () => setTransform("perspective(900px) rotateX(0) rotateY(0)");
-  return (
-    <div ref={ref} onMouseMove={onMove} onMouseLeave={onLeave} className={"card " + className} style={{ ...style, transform }}>
-      {children}
-    </div>
-  );
+  return <div ref={ref} onMouseMove={onMove} onMouseLeave={onLeave} className={"card " + className} style={{ ...style, transform }}>{children}</div>;
 }
 function MagneticButton({ children, onClick, disabled, className = "" }: { children: React.ReactNode; onClick?: () => void; disabled?: boolean; className?: string }) {
   const ref = useRef<HTMLButtonElement>(null); const [t, setT] = useState({ x: 0, y: 0 });
@@ -288,16 +275,17 @@ function BuyTickets({ connection }: { connection: Connection }) {
   }, [count]);
 
   const onAirdrop = useCallback(async () => {
-    if (CLUSTER !== "devnet") { setError("Airdrop only available on devnet."); return; }
+    setError(null); setTxSig(null);
+    if (!publicKey) { setError("Connecte ton wallet d’abord."); return; }
+    if (CLUSTER !== "devnet") { setError("Airdrop disponible uniquement sur devnet."); return; }
     try {
-      if (!publicKey) { setError("Connect wallet first."); return; }
       setLoading(true);
-      const sig = await connection.requestAirdrop(publicKey, LAMPORTS_PER_SOL);
+      const sig = await connection.requestAirdrop(publicKey, 1 * LAMPORTS_PER_SOL);
       await connection.confirmTransaction(sig, "confirmed");
-      confetti({ particleCount: 100, spread: 60, origin: { y: 0.7 } });
-    } catch (e: any) { setError(e?.message || String(e)); }
+      setTxSig(sig);
+    } catch (e: any) { setError(e?.message ?? "Airdrop failed"); }
     finally { setLoading(false); }
-  }, [connection, publicKey]);
+  }, [publicKey, connection]);
 
   const onBuy = useCallback(async () => {
     setError(null); setTxSig(null);
@@ -306,8 +294,9 @@ function BuyTickets({ connection }: { connection: Connection }) {
 
     try {
       setLoading(true);
+
       if (PROGRAM_ID) {
-        // ------- Flow Anchor (constructor à 2 args) -------
+        // ------- Flow Anchor : ctor 3-arguments -------
         const provider = new anchor.AnchorProvider(
           connection as any,
           {
@@ -317,30 +306,40 @@ function BuyTickets({ connection }: { connection: Connection }) {
           } as unknown as anchor.Wallet,
           { commitment: "confirmed" }
         );
-        const program = new (anchor as any).Program(VOLTNET_IDL as any, provider as any);
+
+        // NB: cast en any pour ignorer les surcharges TS
+        const program = new (anchor as any).Program(VOLTNET_IDL as any, PROGRAM_ID as any, provider as any);
 
         const statePda = findStatePda(PROGRAM_ID);
         const vaultPda = findVaultPda(PROGRAM_ID, statePda);
 
-        const state = await ((program as any).account as any)["lotteryState"].fetch(statePda);
-        const epoch: anchor.BN = new anchor.BN((state.epoch ?? 0).toString());
+        // lecture du state (epoch)
+        const stateAcc = await ((program as any).account as any)["lotteryState"].fetch(statePda);
+        const epoch: anchor.BN = new anchor.BN((stateAcc?.epoch ?? 0).toString());
+
         const userTicketsPda = findUserTicketsPda(PROGRAM_ID, publicKey, epoch);
+
+        // garde-fous : si une clé est indéfinie, on stoppe avec un message clair
+        const accounts = {
+          user: publicKey,
+          treasury: TREASURY_PUBKEY,
+          state: statePda,
+          vault: vaultPda,
+          userTickets: userTicketsPda,
+          systemProgram: SystemProgram.programId,
+        };
+        for (const [k, v] of Object.entries(accounts)) {
+          if (!v) throw new Error(`Compte manquant: ${k}`);
+        }
 
         const sig = await (program as any).methods
           .buyTickets(new anchor.BN(count))
-          .accounts({
-            user: publicKey,
-            treasury: TREASURY_PUBKEY,
-            state: statePda,
-            vault: vaultPda,
-            userTickets: userTicketsPda,
-            systemProgram: SystemProgram.programId,
-          })
+          .accounts(accounts)
           .rpc();
 
         setTxSig(sig);
       } else {
-        // ------- Fallback transfert simple -------
+        // ------- Fallback simple (sans programme) -------
         const lamports = toLamports(totalSol);
         const tx = new Transaction().add(
           SystemProgram.transfer({ fromPubkey: publicKey, toPubkey: ESCROW_WALLET, lamports })
@@ -349,9 +348,19 @@ function BuyTickets({ connection }: { connection: Connection }) {
         const sig = await sendTransaction(tx, connection);
         setTxSig(sig);
       }
+
       confetti({ particleCount: 140, spread: 70, origin: { y: 0.7 } });
-    } catch (e: any) { setError(e?.message ?? "Échec de la transaction"); }
-    finally { setLoading(false); }
+    } catch (e: any) {
+      // Erreur typique Anchor quand un compte est undefined → _bn
+      const msg = e?.message || String(e);
+      if (/_bn/.test(msg)) {
+        setError("Paramètre de compte manquant pour l’instruction (vérifie PROGRAM_ID, treasury, state/vault PDA).");
+      } else {
+        setError(msg);
+      }
+    } finally {
+      setLoading(false);
+    }
   }, [publicKey, count, totalSol, connection, wallet]);
 
   const explorerParam = clusterQueryParam(CLUSTER);
@@ -376,13 +385,13 @@ function BuyTickets({ connection }: { connection: Connection }) {
       </div>
 
       <div className="mt-16" />
-      <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
         <MagneticButton onClick={onBuy} disabled={loading} className="w-full">
           {loading ? "Envoi…" : PROGRAM_ID ? "Buy (Program)" : "Buy"}
         </MagneticButton>
-        {CLUSTER === "devnet" && (
-          <button className="btn btn-secondary" onClick={onAirdrop} disabled={loading}>Airdrop (devnet)</button>
-        )}
+        <MagneticButton onClick={onAirdrop} disabled={loading || CLUSTER !== "devnet"} className="w-full btn-secondary">
+          Airdrop (devnet)
+        </MagneticButton>
       </div>
 
       <AnimatePresence>
@@ -501,10 +510,10 @@ export default function App() {
     <ConnectionProvider endpoint={RPC_ENDPOINT}>
       <WalletProvider wallets={wallets} autoConnect>
         <WalletModalProvider>
+          {/* CSS inline (responsive) */}
           <style>{`
   :root{--bg:#070816;--ink:#e2e8f0;--muted:#94a3b8;--card:rgba(255,255,255,.06);--glass:rgba(255,255,255,.08);--border:rgba(255,255,255,.16);--brand1:#7c3aed;--brand2:#06b6d4;--brand3:#22d3ee;--ok:#10b981;--bad:#ef4444}
-  *{box-sizing:border-box}
-  html,body,#root{height:100%}
+  *{box-sizing:border-box} html,body,#root{height:100%}
   body{margin:0;background:linear-gradient(180deg,#050616 0%,#0b1024 60%,#0b122b 100%);color:var(--ink);font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif}
   .screen{min-height:100vh;position:relative;overflow:hidden}
   .container{max-width:1120px;margin:0 auto;padding:clamp(14px,3.5vw,24px)}
@@ -514,8 +523,7 @@ export default function App() {
   .brandtxt{font-weight:900;font-size:22px;background:linear-gradient(90deg,var(--brand1),var(--brand2),var(--brand3));background-size:200% 100%;-webkit-background-clip:text;background-clip:text;color:transparent;animation:sheen 7s linear infinite}
   .walletbtn{border-radius:12px !important}
   .subinfo{opacity:.85;margin:8px 0 24px 0;font-size:14px}
-  .grid-main{display:grid;grid-template-columns:1fr;gap:24px}
-  @media (min-width:860px){.grid-main{grid-template-columns:2fr 1fr}}
+  .grid-main{display:grid;grid-template-columns:1fr;gap:24px} @media (min-width:860px){.grid-main{grid-template-columns:2fr 1fr}}
   .col{display:grid;gap:24px}
   .card{position:relative;padding:clamp(14px,3.2vw,22px);border:1px solid var(--border);border-radius:22px;background:linear-gradient(180deg,rgba(255,255,255,.08),rgba(255,255,255,.04));backdrop-filter:blur(8px);box-shadow:0 10px 30px rgba(2,6,23,.35);transition:transform .2s ease}
   @media (hover:none){ .card{transform:none !important} }
@@ -523,19 +531,11 @@ export default function App() {
   .jackpot{margin-top:6px;font-size:clamp(32px,10vw,48px);font-weight:900;letter-spacing:-.02em;background:linear-gradient(90deg,var(--brand1),var(--brand2),var(--brand3));background-size:200% 100%;-webkit-background-clip:text;background-clip:text;color:transparent;animation:sheen 6s linear infinite;text-shadow:0 6px 24px rgba(34,211,238,.35)}
   .label{font-size:12px;letter-spacing:.2em;text-transform:uppercase;color:var(--muted)}
   .list{margin:10px 0 0 0;padding-left:18px}
-  .small{font-size:12px}
-  .muted{color:var(--muted)}
-  .success{color:#10b981}
-  .error{color:#ef4444}
-  .link{color:#60a5fa}
-  .grid-3{display:grid;grid-template-columns:1fr;gap:12px;margin-top:14px}
-  @media (min-width:860px){.grid-3{grid-template-columns:repeat(3,1fr)}}
-  .input{width:100%;border:1px solid var(--border);border-radius:14px;padding:10px 12px;background:rgba(17,24,39,.35);color:var(--ink)}
-  .input.strong{font-weight:700}
+  .small{font-size:12px} .muted{color:var(--muted)} .success{color:#10b981} .error{color:#ef4444} .link{color:#60a5fa}
+  .grid-3{display:grid;grid-template-columns:1fr;gap:12px;margin-top:14px} @media (min-width:860px){.grid-3{grid-template-columns:repeat(3,1fr)}}
+  .input{width:100%;border:1px solid var(--border);border-radius:14px;padding:10px 12px;background:rgba(17,24,39,.35);color:var(--ink)} .input.strong{font-weight:700}
   .btn{position:relative;overflow:hidden;border:none;border-radius:18px;padding:14px 18px;font-weight:700;color:#fff;background:linear-gradient(90deg,var(--brand1),var(--brand2),var(--brand3));box-shadow:0 20px 40px rgba(124,58,237,.35);cursor:pointer}
-  .btn:hover{filter:brightness(1.05)}
-  .btn:active{filter:brightness(.95)}
-  .btn.btn-disabled{opacity:.6;cursor:not-allowed}
+  .btn:hover{filter:brightness(1.05)} .btn:active{filter:brightness(.95)} .btn.btn-disabled{opacity:.6;cursor:not-allowed}
   .btn-secondary{background:#0f172a;color:#fff;border:1px solid var(--border)}
   .btn-shine{position:absolute;inset:0;transform:translateX(-100%);background:linear-gradient(120deg,transparent,rgba(255,255,255,.25),transparent);animation:shine 2.6s linear infinite}
   .chip{border-radius:18px;padding:14px 16px;border:1px solid var(--border);background:rgba(255,255,255,.06)}
@@ -546,17 +546,14 @@ export default function App() {
   .countgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:12px}
   @media (max-width:480px){.countgrid{grid-template-columns:repeat(2,1fr)}}
   .countbox{border:1px solid var(--border);border-radius:16px;padding:10px 12px;background:rgba(255,255,255,.06);text-align:center}
-  .countnum{font-size:28px;font-weight:900}
-  .countlbl{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+  .countnum{font-size:28px;font-weight:900} .countlbl{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
   .footer{padding:36px 0;text-align:center;color:var(--muted);font-size:13px}
   .hero{padding:60px 0 40px}
   .hero-title{font-size:clamp(28px,6.6vw,56px);line-height:1.05;margin:0;font-weight:900;letter-spacing:-.02em;background:linear-gradient(90deg,#fff,#e9d5ff,#a5f3fc);-webkit-background-clip:text;background-clip:text;color:transparent;text-shadow:0 16px 40px rgba(99,102,241,.35)}
   .hero-sub{max-width:720px;margin-top:14px;opacity:.9}
   .features{display:flex;flex-wrap:wrap;gap:12px;margin-top:18px}
   .feature{border:1px dashed var(--border);border-radius:999px;padding:8px 12px;background:rgba(255,255,255,.05);backdrop-filter:blur(4px)}
-  .cta{margin-top:24px}
-  .cta-btn{border-radius:14px !important}
-  .note{margin-top:10px;color:var(--muted)}
+  .cta{margin-top:24px} .cta-btn{border-radius:14px !important} .note{margin-top:10px;color:var(--muted)}
   .bgfx{position:absolute;inset:0;pointer-events:none}
   .stars{position:absolute;inset:0;background:radial-gradient(circle at 20% 20%,rgba(255,255,255,.06) 0 2px,transparent 2px),radial-gradient(circle at 80% 30%,rgba(255,255,255,.06) 0 2px,transparent 2px),radial-gradient(circle at 60% 70%,rgba(255,255,255,.06) 0 2px,transparent 2px);background-size:700px 700px,900px 900px,1100px 1100px;animation:stars 60s linear infinite}
   @keyframes stars{from{background-position:0 0,0 0,0 0}to{background-position:700px 700px,-900px 900px,1100px -1100px}}
@@ -571,7 +568,7 @@ export default function App() {
   @media (max-width: 380px){.hero-title{font-size:28px}.features{gap:8px}.feature{font-size:13px;padding:6px 10px}}
   @media (pointer:coarse){.card{transform:none !important}}
   .solana{color:#a78bfa}
-`}</style>
+          `}</style>
 
           <Gate />
         </WalletModalProvider>

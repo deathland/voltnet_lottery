@@ -9,7 +9,7 @@ import {
   PublicKey,
   SystemProgram,
   Transaction,
-  TransactionInstruction,
+  
 } from "@solana/web3.js";
 import * as anchor from "@coral-xyz/anchor";
 import { motion, AnimatePresence } from "framer-motion";
@@ -89,19 +89,7 @@ function findUserTicketsPda(programId: PublicKey, user: PublicKey, epoch: anchor
 }
 
 // ----- FIX: WebCrypto discriminator (ArrayBuffer) + fallback Node -----
-async function ixDiscriminator(name: string): Promise<Buffer> {
-  const ns = `global:${name}`;
-  const data = new TextEncoder().encode(ns);               // Uint8Array
-  if (globalThis.crypto?.subtle) {
-    const hashBuf = await globalThis.crypto.subtle.digest("SHA-256", data.buffer as ArrayBuffer);
-    return Buffer.from(new Uint8Array(hashBuf)).subarray(0, 8);
-  } else {
-    // Fallback Node for tests/scripts (ne s’exécute pas dans le navigateur)
-    const { createHash } = await import("crypto");
-    const d = createHash("sha256").update(Buffer.from(data)).digest();
-    return Buffer.from(d).subarray(0, 8);
-  }
-}
+
 
 // ---------- IDL minimal (typé any + adresse) ----------
 const VOLTNET_IDL: any = {

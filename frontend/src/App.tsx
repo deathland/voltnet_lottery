@@ -9,15 +9,12 @@ import {
   PublicKey,
   SystemProgram,
   Transaction,
+  TransactionInstruction,
 } from "@solana/web3.js";
 import * as anchor from "@coral-xyz/anchor";
 import { motion, AnimatePresence } from "framer-motion";
 import confetti from "canvas-confetti";
 import "@solana/wallet-adapter-react-ui/styles.css";
-
-/** =========================================================
- *  VoltNet Lottery dApp — responsive UI + Anchor 2-arg ctor
- *  ========================================================= */
 
 // ---------- Polyfills Buffer/global (Vite) ----------
 import { Buffer } from "buffer";
@@ -32,7 +29,8 @@ if (typeof globalThis !== "undefined") {
 
 // ---------- Config ----------
 type SupportedCluster = "devnet" | "mainnet-beta";
-const CLUSTER: SupportedCluster = (import.meta.env.VITE_SOLANA_CLUSTER as SupportedCluster) || "devnet";
+const CLUSTER: SupportedCluster =
+  (import.meta.env.VITE_SOLANA_CLUSTER as SupportedCluster) || "devnet";
 
 const DEFAULT_ENDPOINT = clusterApiUrl(CLUSTER);
 const RPC_ENDPOINT: string =
@@ -41,7 +39,7 @@ const RPC_ENDPOINT: string =
 const PROGRAM_ID_STR = (import.meta.env.VITE_PROGRAM_ID as string) || "";
 const PROGRAM_ID = PROGRAM_ID_STR ? new PublicKey(PROGRAM_ID_STR) : null;
 
-const ESCROW_WALLET = new PublicKey("4ZubhYsJvTLeVtggbtf5qw8oHmXBG4xDrzkZuracGSaa");
+const ESCROW_WALLET = new PublicKey("4ZubhYsJvTLeVtggbtf5qw8oHmXBG4xDrzkZuracGSaa"); // fallback (sans programme)
 const TREASURY_PUBKEY = new PublicKey(
   (import.meta.env.VITE_TREASURY_PUBKEY as string) || "4ZubhYsJvTLeVtggbtf5qw8oHmXBG4xDrzkZuracGSaa"
 );
@@ -61,9 +59,7 @@ const FEES = {
 function formatSol(lamports: number) {
   return (lamports / LAMPORTS_PER_SOL).toLocaleString(undefined, { maximumFractionDigits: 4 });
 }
-function toLamports(sol: number) {
-  return Math.round(sol * LAMPORTS_PER_SOL);
-}
+function toLamports(sol: number) { return Math.round(sol * LAMPORTS_PER_SOL); }
 function endOfCurrentMonth(): Date {
   const now = new Date(); return new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
 }
@@ -92,11 +88,26 @@ function findUserTicketsPda(programId: PublicKey, user: PublicKey, epoch: anchor
   return PublicKey.findProgramAddressSync([Buffer.from("user_tickets"), user.toBuffer(), u64ToLeBuffer(epoch)], programId)[0];
 }
 
-// ---------- IDL minimal (typed as any + address for 2-arg Program ctor) ----------
+// ----- FIX: WebCrypto discriminator (ArrayBuffer) + fallback Node -----
+async function ixDiscriminator(name: string): Promise<Buffer> {
+  const ns = `global:${name}`;
+  const data = new TextEncoder().encode(ns);               // Uint8Array
+  if (globalThis.crypto?.subtle) {
+    const hashBuf = await globalThis.crypto.subtle.digest("SHA-256", data.buffer as ArrayBuffer);
+    return Buffer.from(new Uint8Array(hashBuf)).subarray(0, 8);
+  } else {
+    // Fallback Node for tests/scripts (ne s’exécute pas dans le navigateur)
+    const { createHash } = await import("crypto");
+    const d = createHash("sha256").update(Buffer.from(data)).digest();
+    return Buffer.from(d).subarray(0, 8);
+  }
+}
+
+// ---------- IDL minimal (typé any + adresse) ----------
 const VOLTNET_IDL: any = {
   version: "0.1.0",
   name: "voltnet_lottery",
-  metadata: { address: PROGRAM_ID_STR }, // ⚠️ indispensable pour Program(idl, provider)
+  metadata: { address: PROGRAM_ID_STR }, // permet le ctor Program(idl, provider)
   instructions: [
     {
       name: "buyTickets",
@@ -162,10 +173,10 @@ function useAnimatedNumber(value: number, duration = 800) {
   }, [value, duration]);
   return display;
 }
-
-// Tilt card (désactivé automatiquement sur écrans tactiles)
 function TiltCard({
-  children, className = "", style = {},
+  children,
+  className = "",
+  style = {},
 }: { children: React.ReactNode; className?: string; style?: React.CSSProperties }) {
   const ref = useRef<HTMLDivElement>(null);
   const [transform, setTransform] = useState("perspective(900px) rotateX(0) rotateY(0)");
@@ -181,7 +192,11 @@ function TiltCard({
     setTransform(`perspective(900px) rotateX(${rotX}deg) rotateY(${rotY}deg)`);
   };
   const onLeave = () => setTransform("perspective(900px) rotateX(0) rotateY(0)");
-  return <div ref={ref} onMouseMove={onMove} onMouseLeave={onLeave} className={"card " + className} style={{ ...style, transform }}>{children}</div>;
+  return (
+    <div ref={ref} onMouseMove={onMove} onMouseLeave={onLeave} className={"card " + className} style={{ ...style, transform }}>
+      {children}
+    </div>
+  );
 }
 function MagneticButton({ children, onClick, disabled, className = "" }: { children: React.ReactNode; onClick?: () => void; disabled?: boolean; className?: string }) {
   const ref = useRef<HTMLButtonElement>(null); const [t, setT] = useState({ x: 0, y: 0 });
@@ -275,7 +290,6 @@ function BuyTickets({ connection }: { connection: Connection }) {
   const [loading, setLoading] = useState(false);
   const [txSig, setTxSig] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [airdropSig, setAirdropSig] = useState<string | null>(null);
 
   const totalSol = useMemo(() => (count <= 0 ? 0 : count * TICKET_PRICE_SOL), [count]);
   const preview = useMemo(() => {
@@ -286,17 +300,16 @@ function BuyTickets({ connection }: { connection: Connection }) {
   }, [count]);
 
   const onAirdrop = useCallback(async () => {
-    if (!publicKey || CLUSTER !== "devnet") return;
+    if (CLUSTER !== "devnet") { setError("Airdrop only available on devnet."); return; }
     try {
-      setError(null); setAirdropSig(null);
-      const sig = await connection.requestAirdrop(publicKey, 1 * LAMPORTS_PER_SOL);
-      const bh = await connection.getLatestBlockhash();
-      await connection.confirmTransaction({ signature: sig, ...bh }, "confirmed");
-      setAirdropSig(sig);
-    } catch (e: any) {
-      setError(e?.message || "Airdrop failed");
-    }
-  }, [publicKey, connection]);
+      if (!publicKey) { setError("Connect wallet first."); return; }
+      setLoading(true);
+      const sig = await connection.requestAirdrop(publicKey, LAMPORTS_PER_SOL);
+      await connection.confirmTransaction(sig, "confirmed");
+      confetti({ particleCount: 100, spread: 60, origin: { y: 0.7 } });
+    } catch (e: any) { setError(e?.message || String(e)); }
+    finally { setLoading(false); }
+  }, [connection, publicKey]);
 
   const onBuy = useCallback(async () => {
     setError(null); setTxSig(null);
@@ -306,7 +319,7 @@ function BuyTickets({ connection }: { connection: Connection }) {
     try {
       setLoading(true);
       if (PROGRAM_ID) {
-        // ------- Anchor flow (2-arg Program ctor) -------
+        // ------- Flow Anchor (constructor à 2 args) -------
         const provider = new anchor.AnchorProvider(
           connection as any,
           {
@@ -316,15 +329,13 @@ function BuyTickets({ connection }: { connection: Connection }) {
           } as unknown as anchor.Wallet,
           { commitment: "confirmed" }
         );
-
-        // ✅ IDL (any) + metadata.address => 2-arg ctor
         const program = new (anchor as any).Program(VOLTNET_IDL as any, provider as any);
 
         const statePda = findStatePda(PROGRAM_ID);
         const vaultPda = findVaultPda(PROGRAM_ID, statePda);
 
         const state = await ((program as any).account as any)["lotteryState"].fetch(statePda);
-        const epoch: anchor.BN = new anchor.BN(state.epoch.toString());
+        const epoch: anchor.BN = new anchor.BN((state.epoch ?? 0).toString());
         const userTicketsPda = findUserTicketsPda(PROGRAM_ID, publicKey, epoch);
 
         const sig = await (program as any).methods
@@ -377,15 +388,14 @@ function BuyTickets({ connection }: { connection: Connection }) {
       </div>
 
       <div className="mt-16" />
-      <MagneticButton onClick={onBuy} disabled={loading} className="w-full">
-        {loading ? "Envoi…" : PROGRAM_ID ? "Buy (Program)" : "Buy"}
-      </MagneticButton>
-
-      {CLUSTER === "devnet" && (
-        <button onClick={onAirdrop} className="btn btn-secondary" style={{ marginTop: 12 }}>
-          +1 SOL (Devnet airdrop)
-        </button>
-      )}
+      <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+        <MagneticButton onClick={onBuy} disabled={loading} className="w-full">
+          {loading ? "Envoi…" : PROGRAM_ID ? "Buy (Program)" : "Buy"}
+        </MagneticButton>
+        {CLUSTER === "devnet" && (
+          <button className="btn btn-secondary" onClick={onAirdrop} disabled={loading}>Airdrop (devnet)</button>
+        )}
+      </div>
 
       <AnimatePresence>
         {txSig && (
@@ -397,14 +407,6 @@ function BuyTickets({ connection }: { connection: Connection }) {
           </motion.div>
         )}
       </AnimatePresence>
-      {airdropSig && (
-        <div className="success mt-8">
-          💧 Airdrop:{" "}
-          <a className="link" href={`https://explorer.solana.com/tx/${airdropSig}${clusterQueryParam(CLUSTER)}`} target="_blank" rel="noreferrer">
-            confirmé
-          </a>
-        </div>
-      )}
       {error && <div className="error mt-12">❌ {error}</div>}
       <div className="small muted mt-12">En achetant vous acceptez les règles. Aucune garantie de gains. Les frais sont affichés ci-dessus.</div>
     </TiltCard>
@@ -435,10 +437,17 @@ function Header() {
   );
 }
 function BackgroundFX() {
+  const balls = useMemo(() => [7, 13, 23, 42].map((n, i) => ({ n, d: 6 + i * 1.3 })), []);
   return (
     <div className="bgfx" aria-hidden>
       <div className="stars" /><div className="aurora aurora-1" /><div className="aurora aurora-2" /><div className="grid" />
-      <div className="beams beams-1" /><div className="beams beams-2" />
+      {balls.map((b, idx) => (
+        <motion.div key={idx} className="ball" style={{ left: `${10 + idx * 20}%`, top: `${20 + (idx % 2) * 25}%` }}
+          animate={{ y: [0, -22, 0] }} transition={{ repeat: Infinity, duration: b.d, ease: "easeInOut" }}>
+          {b.n}
+        </motion.div>
+      ))}
+      <motion.div className="coin" initial={{ rotate: 0 }} animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: 18, ease: "linear" }}>◎</motion.div>
     </div>
   );
 }
@@ -504,65 +513,62 @@ export default function App() {
     <ConnectionProvider endpoint={RPC_ENDPOINT}>
       <WalletProvider wallets={wallets} autoConnect>
         <WalletModalProvider>
-          {/* Thème + responsive (full-screen) */}
           <style>{`
   :root{--bg:#070816;--ink:#e2e8f0;--muted:#94a3b8;--card:rgba(255,255,255,.06);--glass:rgba(255,255,255,.08);--border:rgba(255,255,255,.16);--brand1:#7c3aed;--brand2:#06b6d4;--brand3:#22d3ee;--ok:#10b981;--bad:#ef4444}
-  *{box-sizing:border-box} html,body,#root{height:100%}
+  *{box-sizing:border-box}
+  html,body,#root{height:100%}
   body{margin:0;background:linear-gradient(180deg,#050616 0%,#0b1024 60%,#0b122b 100%);color:var(--ink);font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif}
-  .screen{min-height:100svh;position:relative;overflow:hidden;display:flex;flex-direction:column}
-  .container{max-width:1120px;margin:0 auto;padding:clamp(14px,3.5vw,24px);display:flex;flex-direction:column;flex:1}
+  .screen{min-height:100vh;position:relative;overflow:hidden}
+  .container{max-width:1120px;margin:0 auto;padding:clamp(14px,3.5vw,24px)}
   .header{display:flex;align-items:center;justify-content:space-between;padding:12px 0}
   .brand{display:flex;align-items:center;gap:12px}
   .logo{width:44px;height:44px;display:grid;place-items:center;border-radius:14px;background:linear-gradient(135deg,var(--brand1),var(--brand2));box-shadow:0 8px 24px rgba(124,58,237,.35)}
   .brandtxt{font-weight:900;font-size:22px;background:linear-gradient(90deg,var(--brand1),var(--brand2),var(--brand3));background-size:200% 100%;-webkit-background-clip:text;background-clip:text;color:transparent;animation:sheen 7s linear infinite}
   .walletbtn{border-radius:12px !important}
-
   .subinfo{opacity:.85;margin:8px 0 24px 0;font-size:14px}
-  .grid-main{display:grid;grid-template-columns:1fr;gap:24px;flex:1}
+  .grid-main{display:grid;grid-template-columns:1fr;gap:24px}
   @media (min-width:860px){.grid-main{grid-template-columns:2fr 1fr}}
   .col{display:grid;gap:24px}
-
   .card{position:relative;padding:clamp(14px,3.2vw,22px);border:1px solid var(--border);border-radius:22px;background:linear-gradient(180deg,rgba(255,255,255,.08),rgba(255,255,255,.04));backdrop-filter:blur(8px);box-shadow:0 10px 30px rgba(2,6,23,.35);transition:transform .2s ease}
   @media (hover:none){ .card{transform:none !important} }
-
   .card-title{font-weight:800;font-size:20px;margin-bottom:6px}
   .jackpot{margin-top:6px;font-size:clamp(32px,10vw,48px);font-weight:900;letter-spacing:-.02em;background:linear-gradient(90deg,var(--brand1),var(--brand2),var(--brand3));background-size:200% 100%;-webkit-background-clip:text;background-clip:text;color:transparent;animation:sheen 6s linear infinite;text-shadow:0 6px 24px rgba(34,211,238,.35)}
   .label{font-size:12px;letter-spacing:.2em;text-transform:uppercase;color:var(--muted)}
   .list{margin:10px 0 0 0;padding-left:18px}
-  .small{font-size:12px} .muted{color:var(--muted)} .success{color:#10b981} .error{color:#ef4444} .link{color:#60a5fa}
-
+  .small{font-size:12px}
+  .muted{color:var(--muted)}
+  .success{color:#10b981}
+  .error{color:#ef4444}
+  .link{color:#60a5fa}
   .grid-3{display:grid;grid-template-columns:1fr;gap:12px;margin-top:14px}
   @media (min-width:860px){.grid-3{grid-template-columns:repeat(3,1fr)}}
   .input{width:100%;border:1px solid var(--border);border-radius:14px;padding:10px 12px;background:rgba(17,24,39,.35);color:var(--ink)}
   .input.strong{font-weight:700}
-
   .btn{position:relative;overflow:hidden;border:none;border-radius:18px;padding:14px 18px;font-weight:700;color:#fff;background:linear-gradient(90deg,var(--brand1),var(--brand2),var(--brand3));box-shadow:0 20px 40px rgba(124,58,237,.35);cursor:pointer}
-  .btn:hover{filter:brightness(1.05)} .btn:active{filter:brightness(.95)} .btn.btn-disabled{opacity:.6;cursor:not-allowed}
+  .btn:hover{filter:brightness(1.05)}
+  .btn:active{filter:brightness(.95)}
+  .btn.btn-disabled{opacity:.6;cursor:not-allowed}
   .btn-secondary{background:#0f172a;color:#fff;border:1px solid var(--border)}
   .btn-shine{position:absolute;inset:0;transform:translateX(-100%);background:linear-gradient(120deg,transparent,rgba(255,255,255,.25),transparent);animation:shine 2.6s linear infinite}
-
   .chip{border-radius:18px;padding:14px 16px;border:1px solid var(--border);background:rgba(255,255,255,.06)}
   .chip-sub{margin-top:4px;font-size:12px;opacity:.9}
   .chip-good{background:rgba(16,185,129,.12);border-color:rgba(16,185,129,.35);color:#d1fae5}
   .chip-bad{background:rgba(239,68,68,.12);border-color:rgba(239,68,68,.35);color:#fee2e2}
   .chip-muted{opacity:.9}
-
   .countgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:12px}
   @media (max-width:480px){.countgrid{grid-template-columns:repeat(2,1fr)}}
   .countbox{border:1px solid var(--border);border-radius:16px;padding:10px 12px;background:rgba(255,255,255,.06);text-align:center}
-  .countnum{font-size:28px;font-weight:900} .countlbl{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
-
+  .countnum{font-size:28px;font-weight:900}
+  .countlbl{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
   .footer{padding:36px 0;text-align:center;color:var(--muted);font-size:13px}
-
-  .hero{flex:1;display:flex;flex-direction:column;justify-content:center;padding:60px 0 40px}
+  .hero{padding:60px 0 40px}
   .hero-title{font-size:clamp(28px,6.6vw,56px);line-height:1.05;margin:0;font-weight:900;letter-spacing:-.02em;background:linear-gradient(90deg,#fff,#e9d5ff,#a5f3fc);-webkit-background-clip:text;background-clip:text;color:transparent;text-shadow:0 16px 40px rgba(99,102,241,.35)}
   .hero-sub{max-width:720px;margin-top:14px;opacity:.9}
   .features{display:flex;flex-wrap:wrap;gap:12px;margin-top:18px}
   .feature{border:1px dashed var(--border);border-radius:999px;padding:8px 12px;background:rgba(255,255,255,.05);backdrop-filter:blur(4px)}
-  .cta{margin-top:24px} .cta-btn{border-radius:14px !important}
+  .cta{margin-top:24px}
+  .cta-btn{border-radius:14px !important}
   .note{margin-top:10px;color:var(--muted)}
-
-  /* background FX */
   .bgfx{position:absolute;inset:0;pointer-events:none}
   .stars{position:absolute;inset:0;background:radial-gradient(circle at 20% 20%,rgba(255,255,255,.06) 0 2px,transparent 2px),radial-gradient(circle at 80% 30%,rgba(255,255,255,.06) 0 2px,transparent 2px),radial-gradient(circle at 60% 70%,rgba(255,255,255,.06) 0 2px,transparent 2px);background-size:700px 700px,900px 900px,1100px 1100px;animation:stars 60s linear infinite}
   @keyframes stars{from{background-position:0 0,0 0,0 0}to{background-position:700px 700px,-900px 900px,1100px -1100px}}
@@ -570,22 +576,15 @@ export default function App() {
   .aurora-1{width:900px;height:900px;left:50%;transform:translateX(-50%);top:-360px;background:radial-gradient(circle at 70% 30%,rgba(124,58,237,.5),transparent),radial-gradient(circle at 30% 70%,rgba(34,211,238,.5),transparent)}
   .aurora-2{width:700px;height:700px;left:-180px;bottom:-260px;background:radial-gradient(circle at 20% 20%,rgba(14,165,233,.5),transparent),radial-gradient(circle at 80% 80%,rgba(59,130,246,.5),transparent)}
   .grid{position:absolute;inset:auto 0 0 0;height:320px;background-image:linear-gradient(rgba(255,255,255,.07) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.07) 1px,transparent 1px);background-size:40px 40px;transform:perspective(700px) rotateX(60deg);transform-origin:bottom center;box-shadow:0 -60px 120px rgba(79,70,229,.25) inset}
-  .beams{position:absolute;inset:-20%;background:conic-gradient(from 0deg,transparent 0 20%,rgba(124,58,237,.12) 20% 30%,transparent 30% 50%,rgba(34,211,238,.12) 50% 60%,transparent 60% 100%);filter:blur(42px);mix-blend-mode:screen;animation:spin 80s linear infinite}
-  .beams-1{animation-duration:70s;opacity:.8}
-  .beams-2{animation-duration:110s;opacity:.6}
-  @keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
-
-  /* micro-ajustements mobile */
-  @media (max-width:520px){
-    .header{flex-wrap:wrap;gap:10px}
-    .walletbtn{width:100% !important;justify-content:center}
-    .brandtxt{font-size:18px}
-    .logo{width:36px;height:36px}
-    .grid{height:220px}
-  }
-
+  .ball{position:absolute;width:62px;height:62px;border-radius:999px;background:#fff;color:#0f172a;display:grid;place-items:center;font-weight:900;box-shadow:0 16px 40px rgba(255,255,255,.2)}
+  .coin{position:absolute;right:8%;top:16%;font-size:40px;color:#a5f3fc;text-shadow:0 8px 24px rgba(165,243,252,.4)}
+  @media (max-width:520px){.header{flex-wrap:wrap;gap:10px}.walletbtn{width:100% !important;justify-content:center}.brandtxt{font-size:18px}.logo{width:36px;height:36px}.ball{width:44px;height:44px}.coin{display:none}.grid{height:240px}}
+  @media (max-width: 860px){.container{padding:18px}.header{padding-top:4px}.logo{width:36px;height:36px;border-radius:12px}.brandtxt{font-size:18px}.hero{padding:28px 0 18px}.hero-title{font-size:36px; line-height:1.08}.hero-sub{font-size:15px}.grid-main{grid-template-columns:1fr}.card{padding:16px;border-radius:18px}.jackpot{font-size:36px}.countgrid{grid-template-columns:repeat(4,1fr)}.input{padding:10px 12px}.btn{border-radius:14px;padding:12px 16px}.btn-secondary{padding:10px 14px}.ball{width:40px;height:40px}.coin{display:none}.grid{height:180px}}
+  @media (max-width: 380px){.hero-title{font-size:28px}.features{gap:8px}.feature{font-size:13px;padding:6px 10px}}
+  @media (pointer:coarse){.card{transform:none !important}}
   .solana{color:#a78bfa}
 `}</style>
+
           <Gate />
         </WalletModalProvider>
       </WalletProvider>
